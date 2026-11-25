@@ -38,6 +38,15 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev patchelf
       - run: npm ci
       - run: npx tauri build ${{ matrix.args }}
+      - name: Package macOS installer (.pkg)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          bundle="src-tauri/target/universal-apple-darwin/release/bundle"
+          app="$bundle/macos/Rackbook.app"
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
+          mkdir -p "$bundle/pkg"
+          productbuild --component "$app" /Applications "$bundle/pkg/Rackbook_${version}_universal.pkg"
       - uses: actions/upload-artifact@v4
         with:
           name: Rackbook-${{ matrix.name }}
@@ -47,6 +56,7 @@ jobs:
             src-tauri/target/**/release/bundle/deb/*.deb
             src-tauri/target/**/release/bundle/appimage/*.AppImage
             src-tauri/target/**/release/bundle/dmg/*.dmg
+            src-tauri/target/**/release/bundle/pkg/*.pkg
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
