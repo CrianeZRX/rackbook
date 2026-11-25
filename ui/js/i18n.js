@@ -37,6 +37,8 @@ function core(t, depth) {
   const hit = DICT[t];
   if (hit) return hit[COL[lang]];
   if (depth > 4) return t;
+  let g = /^([★✦●○◆◇▲▼·•+＋\-–→←↑↓✓✗⚠]+ ?)([\s\S]+)$/.exec(t);
+  if (g) return g[1] + tr(g[2], depth + 1);
   for (const p of PATTERNS) {
     const m = p.re.exec(t);
     if (!m) continue;
@@ -45,8 +47,6 @@ function core(t, depth) {
     return out;
   }
   if (t.includes(' · ')) return t.split(' · ').map((x) => tr(x, depth + 1)).join(' · ');
-  let g = /^([★✦●○◆◇▲▼·•+＋\-–→←↑↓✓✗⚠]+ ?)([\s\S]+)$/.exec(t);
-  if (g) return g[1] + tr(g[2], depth + 1);
   g = /^([\s\S]*?[\u3000-\u9fff\uff00-\uffef])( [\x21-\x7e][\x20-\x7e]*)$/.exec(t);
   if (g && DICT[g[1]]) return tr(g[1], depth + 1) + g[2];
   g = /^([\x21-\x7e][\x20-\x7e]* )([\s\S]*[\u3000-\u9fff][\s\S]*)$/.exec(t);

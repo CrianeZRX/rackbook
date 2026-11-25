@@ -9,7 +9,7 @@ function mkServer(name, host, wash, accounts, opts = {}) {
 }
 
 const servers = [
-  mkServer('web-01', '10.0.0.11', 'sky', [acct('root', 'root', 'key', '运维舰长'), acct('deploy', 'none', 'password', '部署领航员')]),
+  mkServer('web-01', '10.0.0.11', 'sky', [acct('root', 'root', 'key', 'ops-captain'), acct('deploy', 'none', 'password', 'deploy-navigator')]),
   mkServer('gpu-lab', 'gpu.lab.local', 'pink', [acct('ubuntu', 'nopasswd')]),
   mkServer('db-02', '10.0.0.32', 'sage', [acct('dba', 'password', 'password')]),
   mkServer('edge-03', 'edge3.example.com', 'gold', [acct('admin', 'unknown')]),

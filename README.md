@@ -1,74 +1,154 @@
-# Rackbook · 星际舰队
+<p align="center">
+  <img src="src-tauri/icons/128x128@2x.png" width="112" alt="Rackbook icon">
+</p>
 
-**A hand-drawn, multi-server monitor and manager for Windows, macOS and Ubuntu.**
-一个手绘画风的多服务器监控与管理工具，支持 Windows、macOS 和 Ubuntu。
+<h1 align="center">Rackbook</h1>
 
-每台服务器是一艘舰船，你是它的船员。Rackbook 通过 SSH 连接你的服务器（服务器端无需安装任何东西），用马克笔与铅笔的手绘风格画出资源、网络、磁盘、GPU 和 Docker 的状态。
+<p align="center"><b>A hand-drawn control room for your servers.</b><br>
+Monitor and manage a whole fleet over plain SSH, drawn in marker and pencil.<br>
+Windows · macOS · Ubuntu.</p>
 
-Every server is a ship; you are its crew. Rackbook talks to your servers over plain SSH (nothing to install on them) and draws CPU, memory, network, disks, GPUs and Docker in a marker-and-pencil style.
+<p align="center">
+  <a href="README.md"><img src="https://img.shields.io/badge/English-c8372f?style=for-the-badge" alt="English"></a>
+  <a href="docs/i18n/README.ja.md"><img src="https://img.shields.io/badge/日本語-231e16?style=for-the-badge" alt="日本語"></a>
+  <a href="docs/i18n/README.es.md"><img src="https://img.shields.io/badge/Español-231e16?style=for-the-badge" alt="Español"></a>
+  <a href="docs/i18n/README.zh-CN.md"><img src="https://img.shields.io/badge/简体中文-231e16?style=for-the-badge" alt="简体中文"></a>
+  <a href="docs/i18n/README.zh-TW.md"><img src="https://img.shields.io/badge/繁體中文-231e16?style=for-the-badge" alt="繁體中文"></a>
+  <a href="docs/i18n/README.ko.md"><img src="https://img.shields.io/badge/한국어-231e16?style=for-the-badge" alt="한국어"></a>
+</p>
 
-## 功能 · Features
+<p align="center">
+  <a href="https://github.com/CrianeZRX/rackbook/releases/latest"><img src="https://img.shields.io/github/v/release/CrianeZRX/rackbook?style=flat-square&color=c8372f&label=download" alt="Latest release"></a>
+  <a href="https://github.com/CrianeZRX/rackbook/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/CrianeZRX/rackbook/build.yml?style=flat-square&label=build" alt="Build"></a>
+  <img src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Ubuntu-5d6c9c?style=flat-square" alt="Platforms">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-3f9e6b?style=flat-square" alt="MIT license"></a>
+</p>
 
-- **星图总览**：舰队按负载编队，舰船大小代表规模，尾焰代表 CPU 负载，护盾代表告警。
-- **拆解图**：等距投影的机箱拆解，CPU、内存、GPU、网卡、磁盘逐件标注，点击查看历史曲线。
-- **进程与服务**、**Docker 货舱**（容器启停、日志、镜像）、**文件舱**（浏览、上传下载、拖拽上传）。
-- **可视化编辑器**：txt / yaml / json / .bashrc 等，语法高亮、结构大纲、远端语法校验、保存前冲突检查与备份。
-- **控制台**与一键打开系统终端。
-- **船员角色**：根据 sudo 权限分为「舰长」与「领航员」，同一服务器可切换账户。
-- **密钥或密码登录**，密码保存在系统钥匙串（Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service）。
-- **后台运行 + 托盘图标 + 可拖动悬浮窗**，悬浮窗内容可配置。
-- **六种界面语言**：English · 日本語 · Español · 简体中文 · 繁體中文 · 한국어，统一手写字体（全部内置，离线可用）。
+<p align="center">
+  <img src="docs/media/teardown.gif" width="860" alt="A 2U server taken apart: lid off, workload up to 90 %, then CPU, memory, GPU, disks and power pulled out one by one">
+</p>
 
-## 下载 · Download
+<p align="center">
+  <a href="https://crianezrx.github.io/rackbook/teardown/"><b>▶ Take the server apart yourself</b></a> (interactive 3D)
+  &nbsp;·&nbsp;
+  <a href="https://crianezrx.github.io/rackbook/demo/"><b>▶ Try Rackbook in your browser</b></a> (an imaginary fleet)
+  &nbsp;·&nbsp;
+  <a href="docs/media/teardown.mp4">Full film with sound</a>
+</p>
 
-在 [Releases](../../releases) 页面下载对应系统的安装包，或在 [Actions](../../actions) 中下载最新构建：
+---
 
-| 系统 | 文件 |
+## Why Rackbook
+
+Most server dashboards are walls of identical grey charts. Rackbook draws each server as a ship in a star fleet and as a machine you can take apart, so you can tell at a glance which one is straining and why.
+
+- **Nothing to install on your servers.** Rackbook talks plain SSH and reads `/proc`. If you can `ssh` in, you can watch it.
+- **See it, then fix it.** Processes, services, Docker containers, files and config are all in the same window. You can restart, stop, edit and upload without opening a terminal.
+- **Safe by default.** Every account is either a *captain* (has sudo) or a *navigator* (read and own processes only), decided by what sudo really allows. Passwords stay in your system keychain.
+- **Stays out of the way.** Close the window and it keeps watch from the tray, with an optional floating panel that only appears when you're working in something else.
+
+## A tour
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/fleet.png" alt="Star chart"><br><b>Star chart.</b> Each server is a ship. Size is its class (cores and memory), the exhaust is CPU load, a dashed shield means it needs attention, and blue dots are network traffic. Docked ships are disconnected.</td>
+<td width="50%"><img src="docs/screenshots/teardown.png" alt="Teardown"><br><b>Teardown.</b> An isometric exploded view of the machine: CPU with one cell per core, memory, GPU, network, disks, fans. Click a part for its history.</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/docker.png" alt="Docker"><br><b>Docker cargo hold.</b> Containers with live CPU, memory and network, plus start, stop, restart, logs and images. It uses sudo automatically when your account isn't in the <code>docker</code> group.</td>
+<td><img src="docs/screenshots/editor.png" alt="Editor"><br><b>Visual editor.</b> YAML, JSON, shell rc files, INI and text, with syntax colouring, a clickable structure outline and a server-side syntax check. It checks for conflicts and makes a backup before saving.</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/processes.png" alt="Processes"><br><b>Processes & services.</b> Sort, filter and signal processes, and start, stop or restart systemd services.</td>
+<td><img src="docs/screenshots/crew.png" alt="Crew"><br><b>Crew & roles.</b> Switch the account you board with, see every user on the server, and promote or demote crew (captains only).</td>
+</tr>
+</table>
+
+<p align="center">
+  <img src="docs/screenshots/float.png" width="260" alt="Floating panel"><br>
+  <sub>The floating panel: drag it anywhere, double-click a ship to board it, right-click for options. You choose which metrics and ships it shows.</sub>
+</p>
+
+### Six languages, one hand
+
+English · 日本語 · Español · 简体中文 · 繁體中文 · 한국어. Switch languages from the sidebar or Settings, and the tray menu follows. Every script is drawn in a matching handwritten face (Gaegu, Yomogi, ZCOOL KuaiLe and LXGW WenKai TC). All the fonts ship inside the app, so it works offline. Your own server names, paths and command output are never translated.
+
+<p align="center"><img src="docs/screenshots/languages.png" alt="The fleet view in six languages"></p>
+
+## Download
+
+Grab the installer for your system from **[Releases](https://github.com/CrianeZRX/rackbook/releases/latest)**:
+
+| System | File |
 |---|---|
-| Windows 10 / 11 x64 | `Rackbook_x.y.z_x64-setup.exe` 或 `.msi` |
-| macOS 10.15+（Intel 与 Apple 芯片） | `Rackbook_x.y.z_universal.dmg` |
-| Ubuntu 22.04+ x64 | `rackbook_x.y.z_amd64.deb` 或 `.AppImage` |
+| Windows 10 / 11 (x64) | `Rackbook_<version>_x64-setup.exe`, or the `.msi` |
+| macOS 10.15+ (Intel & Apple silicon) | `Rackbook_<version>_universal.dmg` |
+| Ubuntu 22.04+ (x64) | `rackbook_<version>_amd64.deb`, or the `.AppImage` |
 
-> macOS 安装包没有签名。首次打开如提示“已损坏”或“无法验证开发者”，在终端运行
-> `xattr -cr /Applications/Rackbook.app`，或在 Finder 中右键 → 打开。
+> **macOS:** the app isn't notarised yet. If macOS says it's damaged or can't be opened, run
+> `xattr -cr /Applications/Rackbook.app` once, or right-click the app and choose **Open**.
+>
+> **Ubuntu:** `sudo apt install ./rackbook_*.deb`. Passwords are kept in GNOME Keyring or KWallet.
 
-## 从源码构建 · Build from source
+## Getting started
 
-需要 [Rust](https://rustup.rs)（stable）与 Node.js 20+。
+1. Click **+ New ship** and enter the host, port and user.
+2. Choose **Key** (Rackbook tries your usual `~/.ssh` keys if you leave the path empty) or **Password**.
+3. Rackbook checks what `sudo` allows and makes the account a **captain** or a **navigator**. Captains can store a sudo password so they can act without being asked each time.
+4. Board the ship (click it) to open its teardown, processes, Docker, files, console and crew.
+
+On first contact, a host's SSH fingerprint is trusted and remembered (trust on first use). If it changes later, Rackbook refuses to connect.
+
+## How it works
+
+```mermaid
+flowchart LR
+  UI["ui/ · hand-drawn web UI<br>(canvas, no framework)"] -- Tauri commands --> Core["src-tauri/ · Rust core"]
+  Core -- "russh · one connection per server,<br>one channel per command" --> S1[(server A)]
+  Core --> S2[(server B)]
+  Core --> K["OS keychain<br>Credential Manager · Keychain · Secret Service"]
+```
+
+- One collector script reads `/proc`, `df`, `ip` and, when present, `nvidia-smi` or amdgpu sysfs and `docker stats`. It runs every few seconds over an existing connection.
+- Each command opens its own channel, so a slow `docker logs` never blocks the gauges.
+- Uploads and downloads stream through `cat` and `tar`, so there's no SFTP subsystem to configure.
+
+## Build from source
+
+You need [Rust](https://rustup.rs) (stable) and Node.js 20+.
 
 ```bash
 npm install
-npx tauri dev        # 开发运行
-npx tauri build      # 生成当前系统的安装包
+npx tauri dev       # run it
+npx tauri build     # make an installer for this system
 ```
 
-- **Windows**：需要 MSVC 构建工具与 WebView2（Win10/11 一般已自带）。
-- **Ubuntu**：
-  ```bash
-  sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev patchelf
-  ```
-- **macOS**：需要 Xcode Command Line Tools。通用包：`rustup target add aarch64-apple-darwin x86_64-apple-darwin && npx tauri build --target universal-apple-darwin`。
+- **Ubuntu:** `sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev patchelf`
+- **macOS universal:** `rustup target add aarch64-apple-darwin x86_64-apple-darwin && npx tauri build --target universal-apple-darwin`
+- **Only the UI:** serve `ui/` with any static server (`python3 -m http.server`) and open `index.html`. Without the Rust core it runs on a built-in imaginary fleet.
 
-只想看界面：在 `ui/` 下起任意静态服务器（如 `python3 -m http.server`）打开 `index.html`，会自动使用内置的模拟舰队。
+Pushing a `v*` tag builds all three platforms in GitHub Actions and attaches the installers to a release.
 
-推送 `v*` 标签（如 `v2.1.0`）会让 GitHub Actions 在三个系统上构建，并创建一个草稿 Release。
+## The teardown film
 
-## 目录 · Layout
+The opening film and the [interactive 3D page](https://crianezrx.github.io/rackbook/teardown/) are built from code in [`showcase/`](showcase/) with the [teardown](https://github.com/elvarofficial/teardown) kit. The machine is a 2U, two-socket, 12-bay server with real part dimensions. One input, the workload, drives everything: CPU and GPU power, the fan speed needed to keep a 20 °F rise front to back (CFM = 3.16 × W / ΔT), heatsink temperatures with their thermal lag, wall power through a 94 % PSU, disk and network traffic, and the LEDs. The power and thermal figures are an illustrative model built from the parts' ratings, not measurements of one machine.
+
+## Repository layout
 
 ```
-src-tauri/            Rust 后端：SSH（russh）、采集脚本、钥匙串、托盘与窗口
-ui/                   前端：原生 JS + Canvas 手绘绘图库，无构建步骤
-  js/i18n.js          运行时翻译；词典在 js/i18n-dict.js
-  fonts/              内置字体（SIL OFL，见 FONTS-LICENSE.md）
-legacy/macos-swiftui/ 早期的原生 SwiftUI macOS 版本（1.x），保留作参考，不再随新功能更新
+src-tauri/            Rust core: SSH, collector, keychain, tray and windows
+ui/                   The app's front end: plain JS + a canvas drawing kit, no build step
+  js/i18n.js          Runtime translation (dictionary in js/i18n-dict.js)
+  fonts/              Bundled handwritten fonts (SIL OFL)
+showcase/             The 3D teardown film and page (three.js)
+docs/                 Screenshots, media and translated READMEs
+legacy/macos-swiftui/ The original native SwiftUI macOS app (1.x), kept for reference
 ```
 
-## 数据与安全 · Data & security
+## Contributing
 
-- 服务器只需要标准 SSH 访问，采集通过读取 `/proc` 完成；GPU 信息来自 `nvidia-smi` 或 amdgpu sysfs。
-- 主机指纹首次连接时信任并记录（TOFU），之后变化会拒绝连接。
-- 密码、密钥口令、sudo 密码只存于本机系统钥匙串；钥匙串不可用时退回到应用数据目录中权限为 600 的文件。
+Issues and pull requests are welcome. Translations are especially welcome: every string lives in `ui/js/i18n-dict.js` as `"简体中文 source": [en, ja, es, ko, zh-TW]`.
 
-## 许可 · License
+## License
 
-代码采用 [MIT](LICENSE) 许可。内置字体采用 SIL Open Font License 1.1，见 [ui/fonts/FONTS-LICENSE.md](ui/fonts/FONTS-LICENSE.md)。
+[MIT](LICENSE). The bundled fonts are under the SIL Open Font License 1.1 (see [ui/fonts/FONTS-LICENSE.md](ui/fonts/FONTS-LICENSE.md)). The showcase uses the MIT-licensed [teardown](https://github.com/elvarofficial/teardown) kit and [three.js](https://threejs.org).
