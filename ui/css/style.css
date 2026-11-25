@@ -213,6 +213,17 @@ tr.prow:hover .act { opacity: 1; }
 .gpucard:hover { transform: translateY(-2px); background: rgba(244,184,41,.16); }
 .gpucard canvas.engine { width: 100%; height: 150px; }
 .gpucard [data-v="mem"], .gpucard b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.teardown-main { align-items: stretch; gap: 18px; }
+.teardown-controls { flex-wrap: wrap; }
+.teardown-focus { position: relative; flex: 0 0 320px; }
+.teardown-focus > .card { position: absolute; inset: 0 0 auto; max-height: 100%; }
+.teardown-focus-body { min-height: 0; overflow: auto; overflow-anchor: none; }
+@media (max-width: 960px) {
+  .teardown-main { flex-direction: column; }
+  .teardown-focus { flex-basis: auto; }
+  .teardown-focus > .card { position: relative; }
+  .teardown-focus-body { max-height: 60vh; }
+}
 .gstats .meter .lab { width: 72px; white-space: nowrap; }
 .gstats .meter .val { width: 150px; white-space: nowrap; }
 
