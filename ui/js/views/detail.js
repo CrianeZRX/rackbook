@@ -9,6 +9,7 @@ import * as procsTab from './procs.js';
 import * as dockerTab from './docker.js';
 import * as filesTab from './files.js';
 import * as consoleTab from './console.js';
+import * as terminalTab from './terminal.js';
 import * as crewTab from './crew.js';
 
 const TABS = [
@@ -16,6 +17,7 @@ const TABS = [
   ['procs', '进程 · 服务', procsTab, true],
   ['docker', 'Docker 货舱', dockerTab, true],
   ['files', '文件', filesTab, true],
+  ['terminal', '终端', terminalTab, true],
   ['console', '命令', consoleTab, true],
   ['crew', '船员 · 权限', crewTab, false],
 ];
@@ -57,7 +59,8 @@ export function mount(el, { id, editServer }) {
     refresh: () => invoke('refresh', { id }),
     disconnect: () => invoke('disconnect', { id }),
     connect: () => invoke('connect', { id }),
-    term: () => invoke('open_terminal', { id }),
+    // the embedded terminal; the system terminal is one click away inside it
+    term: () => { if (S.tab !== 'terminal') { S.tab = 'terminal'; head(); mountTab(); } },
     edit: () => editServer(id),
     acct: (b) => {
       const cfg = server(id);

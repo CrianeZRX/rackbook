@@ -1,6 +1,6 @@
 [package]
 name = "rackbook"
-version = "2.2.2"
+version = "2.3.0"
 edition = "2021"
 description = "Rackbook — hand-drawn server fleet monitor"
 
@@ -12,6 +12,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+base64 = "0.22"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-dialog = "2"

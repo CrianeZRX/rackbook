@@ -47,9 +47,20 @@ function snap(s, k) {
     ioRead: Math.max(0, 1.2e6 + wav(9e5, 2)), ioWrite: Math.max(0, 4e6 + wav(3e6, 4)),
     procs: [['nginx', 'www-data', 12.3, 1.2], ['postgres', 'postgres', 8.1, 6.3], ['python3', 'root', 5.5, 3.1], ['node', 'deploy', 4.2, 2.2], ['dockerd', 'root', 1.9, 1.4], ['sshd', 'root', 0.3, 0.1], ['systemd', 'root', 0.1, 0.2]]
       .map(([c, u, p, m], i) => ({ pid: 1000 + i * 37, user: u, cpu: p, mem: m, rss: m * 1.6e8, command: c })),
-    tcp: 132, gpus: Array.from({ length: sp.gpus }, (_, i) => ({ index: i, name: 'NVIDIA A100-PCIE-40GB', util: Math.max(0, Math.min(100, 70 + wav(25, 2 + i))), memUsed: 2.6e10 + i * 1.2e9, memTotal: 4.0e10, temp: 58 + i * 4, power: 180 + i * 9 })),
+    tcp: 132, gpus: Array.from({ length: sp.gpus }, (_, i) => ({ index: i, name: 'NVIDIA A100-PCIE-40GB', util: Math.max(0, Math.min(100, 70 + wav(25, 2 + i))), memUsed: 2.6e10 + i * 1.2e9, memTotal: 4.0e10, temp: 58 + i * 4 + wav(3, 5 + i), power: 180 + i * 9 + wav(20, 3 + i), powerLimit: 250, fan: 35 + i * 6, clockSm: 1410 - i * 15, memUtil: Math.max(0, Math.min(100, 45 + wav(30, 4 + i))) })),
+    users: mockUsers(sp, cpu, memU),
     hasDocker: sp.docker,
   };
+}
+
+// who's using the machine: a few busy users, a few idle ones; cores and memory add up to the machine's totals roughly
+function mockUsers(sp, cpu, memU) {
+  const busy = cpu / 100 * sp.cores;
+  const shares = [['nova', 0.48], ['root', 0.14], ['www-data', 0.12], ['postgres', 0.1], ['deploy', 0.08], ['orion', 0.05], ['ml', 0.03]];
+  return shares.map(([u, f], i) => {
+    const cores = Math.max(0, busy * f * (1 + 0.35 * Math.sin(t / (3 + i) + i)));
+    return { user: u, cores, cpu: (cores / sp.cores) * 100, rss: memU * f * (0.8 + 0.2 * Math.cos(t / 7 + i)), procs: [42, 121, 18, 9, 6, 3, 2][i] };
+  }).sort((a, b) => b.cpu - a.cpu);
 }
 
 function tick() {
@@ -84,7 +95,45 @@ const files = {
 
 const navigatorOn = (id) => { const s = servers.find((x) => x.id === id); const ac = s && s.accounts.find((x) => x.id === s.activeAccount); return ac?.privilege === 'none'; };
 const activeUser = (id) => { const s = servers.find((x) => x.id === id); return s?.accounts.find((x) => x.id === s.activeAccount)?.user || ''; };
+// ---- a pretend shell for the embedded terminal in the browser preview ----
+const terms = {};
+const enc = (str) => btoa(String.fromCharCode(...new TextEncoder().encode(str)));
+const tout = (tid, str) => setTimeout(() => emit('term', { tid, data: enc(str) }), 0);
+const prompt = (tid) => { const t = terms[tid]; return `\x1b[32m${t.user}@${t.host}\x1b[0m:\x1b[34m~\x1b[0m$ `; };
+function termRun(tid, line) {
+  const t = terms[tid], c = line.trim();
+  const out = {
+    '': '',
+    help: '预览里的小 shell：ls、whoami、uptime、nvidia-smi、colors、clear、exit。真实版本连到服务器上的 bash。',
+    whoami: t.user,
+    uptime: ' 09:20:11 up 23 days,  5:02,  2 users,  load average: 2.31, 2.04, 1.98',
+    ls: '\x1b[1;34mdata\x1b[0m  \x1b[1;34mlogs\x1b[0m  \x1b[1;34mprojects\x1b[0m  docker-compose.yml  notes.txt  \x1b[1;32mtrain.sh\x1b[0m',
+    'nvidia-smi': '+---------------------------------------------------------------+\r\n| GPU  Name              Temp  Pwr:Usage/Cap |   Memory-Usage     |\r\n|  0   A100-PCIE-40GB     60C   185W / 250W  | 24200MiB / 40960MiB|\r\n|  1   A100-PCIE-40GB     62C   189W / 250W  | 25300MiB / 40960MiB|\r\n+---------------------------------------------------------------+',
+    colors: [30, 31, 32, 33, 34, 35, 36, 37].map((n) => `\x1b[${n}m■ ${n}\x1b[0m \x1b[${n + 60}m■ ${n + 60}\x1b[0m`).join('  '),
+  }[c];
+  if (c === 'clear') return tout(tid, '\x1b[2J\x1b[H' + prompt(tid));
+  if (c === 'exit') { tout(tid, 'logout\r\n'); setTimeout(() => emit('term', { tid, closed: true }), 30); delete terms[tid]; return; }
+  tout(tid, (out === undefined ? `bash: ${c.split(' ')[0]}: command not found` : out) + (out === '' ? '' : '\r\n') + prompt(tid));
+}
 export async function invoke(cmd, a) {
+  if (cmd === 'term_open') {
+    const tid = 'mock-' + Math.random().toString(36).slice(2);
+    const s = servers.find((x) => x.id === a.id), ac = s?.accounts.find((x) => x.id === s.activeAccount);
+    terms[tid] = { user: ac?.user || 'root', host: s?.name || 'host', line: '' };
+    tout(tid, `\x1b[90mWelcome to Ubuntu 24.04.1 LTS (GNU/Linux 6.8.0-49-generic x86_64)\x1b[0m\r\n\r\n这是浏览器预览里的模拟终端，输入 help 看看能做什么。\r\n\r\n` + prompt(tid));
+    return tid;
+  }
+  if (cmd === 'term_write') {
+    const t = terms[a.tid]; if (!t) throw new Error('终端已关闭');
+    for (const ch of a.data) {
+      if (ch === '\r') { tout(a.tid, '\r\n'); const l = t.line; t.line = ''; termRun(a.tid, l); }
+      else if (ch === '\x7f') { if (t.line) { t.line = t.line.slice(0, -1); tout(a.tid, '\b \b'); } }
+      else if (ch >= ' ') { t.line += ch; tout(a.tid, ch); }
+    }
+    return;
+  }
+  if (cmd === 'term_resize') return;
+  if (cmd === 'term_close') { delete terms[a.tid]; return; }
   switch (cmd) {
     case 'scan_configs': return a?.path ? [] : [
       { name: 'web-01', host: '10.0.0.11', port: 22, user: 'root', keyPath: '~/.ssh/id_ed25519', source: '~/.ssh/config', note: '' },
@@ -143,6 +192,15 @@ function mockDocker(args) {
 }
 
 function mockRun(cmd) {
+  if (cmd.includes('query-compute-apps')) {
+    const uu = (i) => `GPU-0000${i}-aaaa`;
+    return { code: 0, err: '', out: [0, 1, 2, 3, 4, 5, 6, 7].map((i) => `${i}, ${uu(i)}`).join('\n') + '\n@@\n' +
+      [0, 1, 2, 3, 4, 5, 6, 7].flatMap((i) => [`${uu(i)}, ${23450 + i * 3}, ${18000 + i * 900}, python`, ...(i % 3 === 0 ? [`${uu(i)}, ${30111 + i}, 2100, /usr/bin/python3 -m vllm.entrypoints.api_server`] : [])]).join('\n') };
+  }
+  if (cmd.startsWith('ps -o pid=,user= -p')) {
+    const pids = cmd.match(/-p ([\d,]+)/)[1].split(',');
+    return { code: 0, err: '', out: pids.map((p, i) => `${p} ${i % 3 === 2 ? 'orion' : 'nova'}`).join('\n') };
+  }
   if (cmd.includes('find . -mindepth 1')) {
     const now = Date.now() / 1000;
     const rows = [['d', 'd', 4096, '.config'], ['d', 'd', 4096, 'projects'], ['d', 'd', 4096, 'logs'], ['f', 'f', 3771, '.bashrc'], ['f', 'f', 807, '.profile'],

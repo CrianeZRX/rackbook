@@ -19,8 +19,10 @@ echo @@NET; cat /proc/net/dev 2>/dev/null
 echo @@DF; df -PkT 2>/dev/null || df -Pk 2>/dev/null
 echo @@IO; cat /proc/diskstats 2>/dev/null
 echo @@PS; ps -eo pid=,user=,pcpu=,pmem=,rss=,comm= --sort=-pcpu 2>/dev/null | head -n 80
+echo @@USERS; getconf CLK_TCK 2>/dev/null || echo 100; getconf PAGESIZE 2>/dev/null || echo 4096
+{ awk -F: '{print "P", $3, $1}' /etc/passwd 2>/dev/null; stat -c 'U %u %n' /proc/[0-9]* 2>/dev/null; awk '{l=$0; sub(/^[^)]*\) /,"",l); split(l,f," "); p=FILENAME; sub(/\/stat$/,"",p); print "S", p, f[12]+f[13], f[22]}' /proc/[0-9]*/stat 2>/dev/null; } | awk '$1=="P"{nm[$2]=$3; next} $1=="U"{u[$3]=$2; next} $1=="S"{k=($2 in u)? u[$2] : "?"; c[k]+=$3; m[k]+=$4; n[k]++} END{for(k in c){name=(k in nm)?nm[k]:k; print name, c[k], m[k], n[k]}}'
 echo @@TCP; cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | awk '$4=="01"{n++} END{print n+0}'
-echo @@GPU; command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw --format=csv,noheader,nounits 2>/dev/null
+echo @@GPU; command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit,fan.speed,clocks.sm,utilization.memory --format=csv,noheader,nounits 2>/dev/null
 echo @@AMD; for d in /sys/class/drm/card*/device; do [ -r "$d/gpu_busy_percent" ] && echo "$(basename "$(dirname "$d")") $(cat "$d/gpu_busy_percent") $(cat "$d/mem_info_vram_used" 2>/dev/null || echo 0) $(cat "$d/mem_info_vram_total" 2>/dev/null || echo 0)"; done
 echo @@DOCKER; command -v docker >/dev/null 2>&1 && echo yes
 echo @@END
@@ -32,6 +34,8 @@ pub struct Raw {
     pub cpu: HashMap<String, Vec<u64>>,
     pub net: HashMap<String, (u64, u64)>,
     pub io: HashMap<String, (u64, u64)>,
+    /// cumulative CPU ticks per user, for the per-user CPU rate
+    pub users: HashMap<String, u64>,
 }
 
 pub fn now() -> f64 {
@@ -206,6 +210,32 @@ pub fn build(out: &str, prev: Option<&Raw>) -> Option<(Snapshot, Raw)> {
             command: f[5..].join(" "),
         });
     }
+    // Users: CPU from the change in their processes' cumulative ticks since the last sample, memory from RSS pages
+    let mut users_raw: HashMap<String, u64> = HashMap::new();
+    {
+        let u = get("USERS");
+        let clk: f64 = u.first().and_then(|x| x.trim().parse().ok()).filter(|v: &f64| *v > 0.0).unwrap_or(100.0);
+        let page: f64 = u.get(1).and_then(|x| x.trim().parse().ok()).filter(|v: &f64| *v > 0.0).unwrap_or(4096.0);
+        let cores = (s.cores.max(1)) as f64;
+        for line in u.iter().skip(2) {
+            let f = ws(line);
+            if f.len() < 4 { continue; }
+            let (Ok(ticks), Ok(pages), Ok(n)) = (f[1].parse::<u64>(), f[2].parse::<f64>(), f[3].parse::<i64>()) else { continue };
+            let name = f[0].to_string();
+            let mut core_used = 0.0;
+            if let Some(p) = prev {
+                if dt > 0.0 {
+                    if let Some(&pt) = p.users.get(&name) {
+                        // a process that exited takes its ticks with it: never report negative use
+                        core_used = (ticks.saturating_sub(pt) as f64 / clk / dt).max(0.0);
+                    }
+                }
+            }
+            users_raw.insert(name.clone(), ticks);
+            s.users.push(UserUse { user: name, cores: core_used, cpu: (core_used / cores * 100.0).min(100.0), rss: pages * page, procs: n });
+        }
+        s.users.sort_by(|a, b| b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal).then(b.rss.partial_cmp(&a.rss).unwrap_or(std::cmp::Ordering::Equal)));
+    }
     s.tcp = get("TCP").first().and_then(|x| x.trim().parse().ok()).unwrap_or(0);
 
     // GPUs
@@ -221,6 +251,10 @@ pub fn build(out: &str, prev: Option<&Raw>) -> Option<(Snapshot, Raw)> {
             mem_total: f[4].parse::<f64>().unwrap_or(0.0) * 1_048_576.0,
             temp: f.get(5).and_then(|v| v.parse().ok()),
             power: f.get(6).and_then(|v| v.parse().ok()),
+            power_limit: f.get(7).and_then(|v| v.parse().ok()),
+            fan: f.get(8).and_then(|v| v.parse().ok()),
+            clock_sm: f.get(9).and_then(|v| v.parse().ok()),
+            mem_util: f.get(10).and_then(|v| v.parse().ok()),
         });
     }
     if s.gpus.is_empty() {
@@ -233,12 +267,11 @@ pub fn build(out: &str, prev: Option<&Raw>) -> Option<(Snapshot, Raw)> {
                 util: f[1].parse().unwrap_or(0.0),
                 mem_used: f[2].parse().unwrap_or(0.0),
                 mem_total: f[3].parse().unwrap_or(0.0),
-                temp: None,
-                power: None,
+                ..Default::default()
             });
         }
     }
     s.has_docker = get("DOCKER").iter().any(|l| l.trim() == "yes");
 
-    Some((s, Raw { time: t, cpu, net, io }))
+    Some((s, Raw { time: t, cpu, net, io, users: users_raw }))
 }

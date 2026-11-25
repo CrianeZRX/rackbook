@@ -2,6 +2,8 @@ import { say, liveOf, health, memFrac, worstDisk, mountFrac, gpuUtil, loadText }
 import { card, btn, meter, delegate, bar } from '../ui.js';
 import { Teardown, SUBS, sentence, lineChart } from '../teardown.js';
 import { C, loadColor, sketchAll } from '../kit.js';
+import { gpuCardScene, heatColor } from '../rockets.js';
+import { openGpu } from './gpu_detail.js';
 import * as F from '../fmt.js';
 import { esc } from '../fmt.js';
 
@@ -17,11 +19,19 @@ export function mount(el, { id }) {
       <div id="focus" style="width:320px;flex:none"></div>
     </div>
     <div class="grid2" id="charts"></div>
+    <div id="bay"></div>
     <div class="row top" style="gap:18px;align-items:stretch"><div id="disks" class="grow"></div><div id="nets" class="grow"></div></div>
   </div>`;
   const hero = new Teardown(el.querySelector('#hero'));
   let exploded = true, alive = true, raf = 0;
-  const loop = (t) => { if (!alive) return; const l = liveOf(id); hero.snap = l.snap; hero.hl = health(l); hero.draw(t); raf = requestAnimationFrame(loop); };
+  let frame = 0;
+  const loop = (t) => {
+    if (!alive) return;
+    const l = liveOf(id); hero.snap = l.snap; hero.hl = health(l); hero.draw(t);
+    // engines: every other frame is plenty for a flicker
+    if (++frame % 2 === 0 && l.snap?.gpus?.length) el.querySelectorAll('canvas.engine').forEach((cv) => { const g = l.snap.gpus.find((x) => String(x.index) === cv.dataset.g); if (g) gpuCardScene(cv, g, t / 1000); });
+    raf = requestAnimationFrame(loop);
+  };
   raf = requestAnimationFrame(loop);
 
   const buttons = () => {
@@ -41,6 +51,7 @@ export function mount(el, { id }) {
     explode: () => { exploded = !exploded; hero.setExploded(exploded); buttons(); say(exploded ? '拆开了：盖板掀起，硬盘抽出，网卡和电源往后退。点任一部件看细节。' : '合上了。数字仍在实时更新。'); },
     focus: (b) => setFocus(b.dataset.k),
     chart: (b) => setFocus(b.dataset.k),
+    gpu: (b) => openGpu(id, Number(b.dataset.g)),
   });
 
   const focusPanel = (s) => {
@@ -79,6 +90,41 @@ export function mount(el, { id }) {
     return card(body, { kicker: sub[2], title: sub[1], lit: true });
   };
 
+  // the propulsion bay: one engine per GPU, built once per card count, numbers refreshed in place
+  const renderBay = (s, hist) => {
+    const bay = el.querySelector('#bay');
+    const gpus = s?.gpus || [];
+    if (!gpus.length) { bay.innerHTML = ''; bay.dataset.n = ''; return; }
+    const models = Object.entries(gpus.reduce((m, g) => ((m[g.name] = (m[g.name] || 0) + 1), m), {})).map(([n, c]) => (c > 1 ? `${c} × ${n}` : n)).join(' · ');
+    if (bay.dataset.n !== String(gpus.length)) {
+      bay.dataset.n = String(gpus.length);
+      bay.innerHTML = `<div class="card sk${hero.focus === 'gpu' ? ' lit' : ''}">
+        <div class="head"><span class="kicker">Propulsion bay</span><span class="h">推进器舱 · ${gpus.length} 块显卡</span><span class="spacer"></span><span class="muted small" data-notr>${esc(models)}</span></div>
+        <div class="row top" style="gap:18px;align-items:stretch;flex-wrap:wrap">
+          <div class="col" style="flex:1 1 320px;min-width:280px;gap:4px"><div class="row base"><span class="big" id="gpuAvg"></span><span class="muted">平均推力 · 每块显卡是这艘船的一台引擎：尾焰越长越忙，喷管越红越热，燃料罐水位是显存</span></div><canvas data-c="gpu" style="width:100%;height:150px"></canvas></div>
+          <div class="gpugrid" style="flex:3 1 520px">${gpus.map((g) => `<div class="gpucard sk click" data-act="gpu" data-g="${g.index}" title="点击查看这台引擎（显卡）的详情">
+            <canvas class="engine" data-g="${g.index}"></canvas>
+            <div class="row base" style="gap:6px"><b class="mono">引擎 #${g.index}</b><span class="spacer"></span><b class="hand" data-v="util" style="font-size:20px"></b></div>
+            <div class="mono muted" data-v="mem" style="font-size:11px"></div>
+            <div class="row mono" style="font-size:11px;gap:6px"><span data-v="temp"></span><span class="spacer"></span><span data-v="power" class="muted"></span></div></div>`).join('')}</div>
+        </div></div>`;
+      sketchAll(bay);
+    }
+    el.querySelector('#gpuAvg').textContent = F.pct(gpuUtil(s));
+    for (const g of gpus) {
+      const c = bay.querySelector(`.gpucard[data-g="${g.index}"]`); if (!c) continue;
+      c.querySelector('[data-v="util"]').textContent = F.pct(g.util);
+      c.querySelector('[data-v="mem"]').textContent = `${F.bytes(g.memUsed)} / ${F.bytes(g.memTotal)}`;
+      const t = c.querySelector('[data-v="temp"]');
+      t.textContent = g.temp == null ? '—' : `${Math.round(g.temp)}°C`;
+      t.style.color = g.temp != null && g.temp >= 85 ? C.red : '';
+      c.querySelector('[data-v="power"]').textContent = g.power == null ? '' : `${Math.round(g.power)} W`;
+      c.style.boxShadow = g.temp != null && g.temp >= 85 ? `inset 0 0 0 999px rgba(239,106,76,.12)` : '';
+    }
+    const cv = bay.querySelector('[data-c="gpu"]'); if (cv) lineChart(cv, [{ values: hist.gpu, color: C.pink }], 100, F.pct);
+    void heatColor;
+  };
+
   const update = () => {
     const l = liveOf(id), s = l.phase === 'online' ? l.snap : null, hist = l.hist || {};
     el.querySelector('#focus').innerHTML = focusPanel(s);
@@ -89,17 +135,6 @@ export function mount(el, { id }) {
       cc('net', 'Network', '网络吞吐', s ? '↓ ' + F.rate(s.rxRate) : '—', s ? `↑ ${F.rate(s.txRate)}   蓝 = 下行，红 = 上行` : ''),
       cc('disk', 'Disk I/O', '磁盘读写', s ? '读 ' + F.rate(s.ioRead) : '—', s ? `写 ${F.rate(s.ioWrite)}   绿 = 读，棕 = 写` : ''),
     ];
-    if (s?.gpus?.length) {
-      // "8 × NVIDIA A100-PCIE-40GB" rather than the same name eight times
-      const models = Object.entries(s.gpus.reduce((m, g) => ((m[g.name] = (m[g.name] || 0) + 1), m), {})).map(([n, c]) => (c > 1 ? `${c} × ${n}` : n)).join(' · ');
-      charts.push(cc('gpu', 'GPU', '显卡占用（平均）', F.pct(gpuUtil(s)), models));
-      // the card beside it: one row per GPU, so the grid has no hole and each card is readable at a glance
-      const hot = (t) => (t == null ? '' : t >= 85 ? 'red' : '');
-      charts.push(`<div class="card sk${hero.focus === 'gpu' ? ' lit' : ''}"><div class="head"><span class="kicker">GPUs</span><span class="h">逐块显卡</span></div>
-        <div style="overflow:auto;max-height:200px"><table class="sheet"><tr><th>#</th><th style="width:38%">占用</th><th class="r">显存</th><th class="r">温度</th><th class="r">功耗</th></tr>` +
-        s.gpus.map((g) => `<tr><td class="nw"><b>${g.index}</b></td><td><div class="row" style="gap:6px">${bar(g.util / 100, C.pink, 9)}<span class="nw" style="width:34px;text-align:right">${F.pct(g.util)}</span></div></td><td class="r">${F.bytes(g.memUsed)} / ${F.bytes(g.memTotal)}</td><td class="r ${hot(g.temp)}">${g.temp == null ? '—' : Math.round(g.temp) + '°C'}</td><td class="r">${g.power == null ? '—' : Math.round(g.power) + ' W'}</td></tr>`).join('') +
-        `</table></div></div>`);
-    }
     const ch = el.querySelector('#charts');
     ch.innerHTML = charts.join('');
     const draw = (k, lines, maxY, fmt) => { const c = ch.querySelector(`[data-c="${k}"]`); if (c) lineChart(c, lines, maxY, fmt); };
@@ -107,7 +142,7 @@ export function mount(el, { id }) {
     draw('mem', [{ values: hist.mem, color: C.blue }], 100, F.pct);
     draw('net', [{ values: hist.rx, color: C.sky }, { values: hist.tx, color: C.rose, fill: false }], null, F.rate);
     draw('disk', [{ values: hist.ioR, color: C.sage }, { values: hist.ioW, color: C.wood, fill: false }], null, F.rate);
-    draw('gpu', [{ values: hist.gpu, color: C.pink }], 100, F.pct);
+    renderBay(s, hist);
 
     el.querySelector('#disks').innerHTML = card(s && s.mounts.length ? `<table class="sheet"><tr><th>挂载点</th><th>用量</th><th class="r">已用 / 总量</th><th class="r">%</th></tr>` +
       s.mounts.map((m) => `<tr class="${mountFrac(m) > 0.9 ? 'red' : ''}"><td class="hand name" title="${esc(m.mount)}"><b data-notr>${esc(m.mount)}</b><div class="mono muted" data-notr style="font-size:10px">${esc(m.fs)} · ${esc(m.type)}</div></td><td style="min-width:90px">${bar(mountFrac(m), null, 11)}</td><td class="r">${F.bytes(m.used)} / ${F.bytes(m.used + m.avail)}</td><td class="r"><b>${F.pct(mountFrac(m) * 100)}</b></td></tr>`).join('') + '</table>'

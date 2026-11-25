@@ -151,4 +151,4 @@ Issues and pull requests are welcome. Translations are especially welcome: every
 
 ## License
 
-[MIT](LICENSE). The bundled fonts are under the SIL Open Font License 1.1 (see [ui/fonts/FONTS-LICENSE.md](ui/fonts/FONTS-LICENSE.md)). The showcase uses the MIT-licensed [teardown](https://github.com/elvarofficial/teardown) kit and [three.js](https://threejs.org).
+[MIT](LICENSE). The bundled fonts are under the SIL Open Font License 1.1 (see [ui/fonts/FONTS-LICENSE.md](ui/fonts/FONTS-LICENSE.md)). The embedded terminal uses [xterm.js](https://xtermjs.org) (MIT, bundled in `ui/vendor/xterm`). The showcase uses the MIT-licensed [teardown](https://github.com/elvarofficial/teardown) kit and [three.js](https://threejs.org).

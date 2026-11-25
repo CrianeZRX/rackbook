@@ -44,6 +44,8 @@ pub struct Store {
     loops: Mutex<HashMap<Uuid, JoinHandle<()>>>,
     pub known: Arc<KnownHosts>,
     emit: Emit,
+    /// open embedded terminals: id -> the shell channel's write half
+    terms: tokio::sync::Mutex<HashMap<String, Arc<russh::ChannelWriteHalf<russh::client::Msg>>>>,
 }
 
 impl Store {
@@ -73,10 +75,60 @@ impl Store {
             dial_locks: Mutex::new(HashMap::new()),
             loops: Mutex::new(HashMap::new()),
             emit,
+            terms: Default::default(),
         })
     }
 
     // ---------- events & persistence ----------
+
+    // ---------- embedded terminal ----------
+
+    /// Opens a login shell on the server's existing connection and streams its output as "term" events.
+    pub async fn term_open(self: &Arc<Self>, id: Uuid, cols: u32, rows: u32) -> Result<String, String> {
+        use base64::Engine;
+        let c = self.conn(id).await?;
+        let (mut rd, wr) = c.shell(cols, rows).await.map_err(|e| crate::ssh::friendly(&e.to_string()))?;
+        let tid = Uuid::new_v4().to_string();
+        self.terms.lock().await.insert(tid.clone(), Arc::new(wr));
+        let me = self.clone();
+        let t2 = tid.clone();
+        tokio::spawn(async move {
+            let b64 = base64::engine::general_purpose::STANDARD;
+            while let Some(msg) = rd.wait().await {
+                match msg {
+                    russh::ChannelMsg::Data { ref data } | russh::ChannelMsg::ExtendedData { ref data, .. } => {
+                        (me.emit)("term", json!({ "tid": t2, "data": b64.encode(&data[..]) }));
+                    }
+                    russh::ChannelMsg::ExitStatus { exit_status } => {
+                        (me.emit)("term", json!({ "tid": t2, "exit": exit_status }));
+                    }
+                    russh::ChannelMsg::Eof | russh::ChannelMsg::Close => break,
+                    _ => {}
+                }
+            }
+            me.terms.lock().await.remove(&t2);
+            (me.emit)("term", json!({ "tid": t2, "closed": true }));
+        });
+        Ok(tid)
+    }
+
+    pub async fn term_write(&self, tid: &str, data: &[u8]) -> Result<(), String> {
+        let w = self.terms.lock().await.get(tid).cloned().ok_or("终端已关闭")?;
+        w.data(data).await.map_err(|e| e.to_string())
+    }
+
+    pub async fn term_resize(&self, tid: &str, cols: u32, rows: u32) {
+        if let Some(w) = self.terms.lock().await.get(tid).cloned() {
+            let _ = w.window_change(cols.max(20), rows.max(5), 0, 0).await;
+        }
+    }
+
+    pub async fn term_close(&self, tid: &str) {
+        if let Some(w) = self.terms.lock().await.remove(tid) {
+            let _ = w.eof().await;
+            let _ = w.close().await;
+        }
+    }
 
     pub fn say(&self, text: impl Into<String>, tone: &str) {
         (self.emit)("status", json!({ "text": text.into(), "tone": tone }));

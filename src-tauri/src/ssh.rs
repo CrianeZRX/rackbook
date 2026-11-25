@@ -246,6 +246,18 @@ impl Conn {
         }
     }
 
+    /// An interactive login shell on a pseudo-terminal, for the embedded terminal.
+    /// The read half streams the shell's output; the write half takes keystrokes and window resizes.
+    pub async fn shell(&self, cols: u32, rows: u32) -> Result<(russh::ChannelReadHalf, russh::ChannelWriteHalf<client::Msg>)> {
+        let ch = self.handle.channel_open_session().await?;
+        // ask for colour and UTF-8 the way a desktop terminal would
+        let _ = ch.set_env(false, "LANG", "C.UTF-8").await;
+        let _ = ch.set_env(false, "COLORTERM", "truecolor").await;
+        ch.request_pty(false, "xterm-256color", cols.max(20), rows.max(5), 0, 0, &[]).await?;
+        ch.request_shell(false).await?;
+        Ok(ch.split())
+    }
+
     pub async fn close(&self) {
         let _ = self.handle.disconnect(Disconnect::ByApplication, "bye", "en").await;
     }

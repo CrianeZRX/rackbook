@@ -37,7 +37,8 @@ export async function boot() {
   setLang(S.prefs.lang || saved || '');
   if (!S.prefs.lang) { S.prefs.lang = getLang(); invoke('set_prefs', { prefs: S.prefs }); }
   if (S.servers.length) S.status = { text: `正在呼叫 ${S.servers.filter((s) => !s.paused).length} 艘舰船…`, tone: 'info' };
-  await listen('live', ({ id, live }) => { S.live[id] = live; changed('live'); });
+  await listen('live', ({ id, live }) => { S.live[id] = live; record(id, live.snap); changed('live'); });
+  Object.entries(S.live).forEach(([id, l]) => record(id, l.snap));
   await listen('servers', (list) => { S.servers = list; changed('servers'); });
   await listen('prefs', (p) => { const relang = p.lang && p.lang !== getLang(); S.prefs = p; if (relang) location.reload(); else changed('prefs'); });
   await listen('status', ({ text, tone }) => say(text, tone));
@@ -108,3 +109,24 @@ export function shipClass(s) {
 
 export const onlineCount = () => S.servers.filter((s) => liveOf(s.id).phase === 'online').length;
 export const alertTotal = () => S.servers.reduce((n, s) => n + alerts(liveOf(s.id)).length + (liveOf(s.id).phase === 'offline' ? 1 : 0), 0);
+
+// ---------- client-side history the backend doesn't keep: each GPU, and each user's share ----------
+// ext(id) = { t: last snapshot time, gpu: { index: { util:[], mem:[], temp:[], power:[] } }, users: [{ name: cores }] }
+const EXT = {};
+const CAP = 150;
+const push = (a, v) => { a.push(v); if (a.length > CAP) a.shift(); };
+export const ext = (id) => EXT[id] || (EXT[id] = { t: 0, gpu: {}, users: [] });
+function record(id, snap) {
+  if (!snap) return;
+  const e = ext(id);
+  if (snap.time === e.t) return;
+  e.t = snap.time;
+  for (const g of snap.gpus || []) {
+    const h = e.gpu[g.index] || (e.gpu[g.index] = { util: [], mem: [], temp: [], power: [] });
+    push(h.util, g.util);
+    push(h.mem, g.memTotal > 0 ? (g.memUsed / g.memTotal) * 100 : 0);
+    push(h.temp, g.temp ?? 0);
+    push(h.power, g.power ?? 0);
+  }
+  if (snap.users) push(e.users, Object.fromEntries(snap.users.map((u) => [u.user, u.cores])));
+}

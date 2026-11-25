@@ -189,6 +189,28 @@ async fn run(store: S<'_>, id: String, cmd: String, stdin: Option<String>, timeo
 }
 
 #[tauri::command]
+async fn term_open(store: S<'_>, id: String, cols: u32, rows: u32) -> Result<String, String> {
+    store.inner().term_open(uid(&id)?, cols, rows).await
+}
+
+#[tauri::command]
+async fn term_write(store: S<'_>, tid: String, data: String) -> Result<(), String> {
+    store.term_write(&tid, data.as_bytes()).await
+}
+
+#[tauri::command]
+async fn term_resize(store: S<'_>, tid: String, cols: u32, rows: u32) -> Result<(), String> {
+    store.term_resize(&tid, cols, rows).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn term_close(store: S<'_>, tid: String) -> Result<(), String> {
+    store.term_close(&tid).await;
+    Ok(())
+}
+
+#[tauri::command]
 async fn sudo(store: S<'_>, id: String, cmd: String, timeout: Option<u64>) -> Result<RunOut, String> {
     Ok(store.sudo(uid(&id)?, &cmd, None, timeout.unwrap_or(90)).await)
 }
@@ -448,7 +470,7 @@ pub fn run_app() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            get_state, scan_configs, save_server, delete_server, move_server, connect, disconnect, connect_all, disconnect_all,
+            get_state, scan_configs, term_open, term_write, term_resize, term_close, save_server, delete_server, move_server, connect, disconnect, connect_all, disconnect_all,
             refresh, switch_account, reprobe, set_sudo_password, test_connection, forget_host_key, run, sudo, docker,
             docker_via_sudo, write_file, download, upload, open_terminal, set_prefs, go_background, show_main,
             float_resize, reset_float, quit_app

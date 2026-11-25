@@ -182,6 +182,23 @@ pub struct Gpu {
     pub mem_total: f64,
     pub temp: Option<f64>,
     pub power: Option<f64>,
+    pub power_limit: Option<f64>,
+    pub fan: Option<f64>,
+    pub clock_sm: Option<f64>,
+    pub mem_util: Option<f64>,
+}
+
+/// One login user's share of the machine right now
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UserUse {
+    pub user: String,
+    /// percent of the whole machine (all cores)
+    pub cpu: f64,
+    /// cores' worth of CPU in use
+    pub cores: f64,
+    pub rss: f64,
+    pub procs: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -213,6 +230,7 @@ pub struct Snapshot {
     pub procs: Vec<ProcRow>,
     pub tcp: i64,
     pub gpus: Vec<Gpu>,
+    pub users: Vec<UserUse>,
     pub has_docker: bool,
 }
 

@@ -5,12 +5,21 @@ use std::sync::{Arc, Mutex};
 use rackbook_lib::model::*;
 use rackbook_lib::store::{SecretInput, Store};
 
+static TERM_OUT: Mutex<String> = Mutex::new(String::new());
+
 fn store() -> (Arc<Store>, Arc<Mutex<Vec<String>>>) {
     let log = Arc::new(Mutex::new(vec![]));
     let l2 = log.clone();
     let dir = std::env::temp_dir().join(format!("rackbook-test-{}", uuid::Uuid::new_v4()));
     let s = Store::new(dir, Arc::new(move |ev: &str, v: serde_json::Value| {
         if ev == "status" { l2.lock().unwrap().push(v["text"].as_str().unwrap_or("").to_string()); }
+        if ev == "term" {
+            if let Some(d) = v["data"].as_str() {
+                use base64::Engine;
+                let b = base64::engine::general_purpose::STANDARD.decode(d).unwrap_or_default();
+                TERM_OUT.lock().unwrap().push_str(&String::from_utf8_lossy(&b));
+            }
+        }
     }));
     (s, log)
 }
@@ -49,6 +58,26 @@ async fn end_to_end() {
     assert_eq!(r.out.trim(), "1");
     let r = st.run(id, "cat > /tmp/rackbook-up.txt; wc -c < /tmp/rackbook-up.txt", Some(b"hello\x00world"), 10).await;
     assert_eq!(r.out.trim(), "11", "binary-safe stdin");
+    // per-user CPU and memory: root is always there, and the second sample has a rate
+    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+    let s2 = st.live.read().unwrap()[&id].snap.clone().unwrap();
+    println!("users: {:?}", s2.users.iter().map(|u| format!("{} {:.1}% {:.0}MB {}p", u.user, u.cpu, u.rss / 1e6, u.procs)).collect::<Vec<_>>());
+    assert!(s2.users.iter().any(|u| u.user == "root" && u.procs > 0 && u.rss > 0.0));
+
+    // embedded terminal: a real PTY shell, keystrokes in, output out
+    let tid = st.term_open(id, 100, 30).await.expect("shell");
+    st.term_write(&tid, b"echo rb-$((40+2)); tty\n").await.unwrap();
+    let mut seen = false;
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        if TERM_OUT.lock().unwrap().contains("rb-42") { seen = true; break; }
+    }
+    let out = TERM_OUT.lock().unwrap().clone();
+    assert!(seen, "terminal output: {out:?}");
+    assert!(out.contains("/dev/pts/"), "should be a pty: {out:?}");
+    st.term_resize(&tid, 120, 40).await;
+    st.term_close(&tid).await;
+
     let w = st.write_file(id, "/tmp/rackbook-w.txt", "第一行\n".as_bytes(), true).await;
     assert!(w.ok(), "{}", w.err);
     assert_eq!(st.run(id, "cat /tmp/rackbook-w.txt", None, 10).await.out, "第一行\n");

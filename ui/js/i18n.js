@@ -37,8 +37,10 @@ function core(t, depth) {
   const hit = DICT[t];
   if (hit) return hit[COL[lang]];
   if (depth > 4) return t;
+  // a leading symbol ("✓ ", "↑ ", "● "): translate what follows. An exact entry for the rest wins straight away;
+  // otherwise patterns get a chance at the whole string first (they may include the symbol themselves)
   let g = /^([★✦●○◆◇▲▼·•+＋\-–→←↑↓✓✗⚠]+ ?)([\s\S]+)$/.exec(t);
-  if (g) return g[1] + tr(g[2], depth + 1);
+  if (g && DICT[g[2]]) return g[1] + DICT[g[2]][COL[lang]];
   for (const p of PATTERNS) {
     const m = p.re.exec(t);
     if (!m) continue;
@@ -46,6 +48,7 @@ function core(t, depth) {
     p.order.forEach((n, i) => { out = out.split(`{${n}}`).join(tr(m[i + 1], depth + 1)); });
     return out;
   }
+  if (g) return g[1] + tr(g[2], depth + 1);
   if (t.includes(' · ')) return t.split(' · ').map((x) => tr(x, depth + 1)).join(' · ');
   g = /^([\s\S]*?[\u3000-\u9fff\uff00-\uffef])( [\x21-\x7e][\x20-\x7e]*)$/.exec(t);
   if (g && DICT[g[1]]) return tr(g[1], depth + 1) + g[2];
