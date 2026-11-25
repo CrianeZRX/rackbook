@@ -92,7 +92,7 @@ Grab the installer for your system from **[Releases](https://github.com/CrianeZR
 
 ## Getting started
 
-1. Click **+ New ship** and enter the host, port and user.
+1. Click **+ New ship** and enter the host, port and user. Or click **Import from config…** to pick servers from your `~/.ssh/config` (and PuTTY sessions on Windows) in one go.
 2. Choose **Key** (Rackbook tries your usual `~/.ssh` keys if you leave the path empty) or **Password**.
 3. Rackbook checks what `sudo` allows and makes the account a **captain** or a **navigator**. Captains can store a sudo password so they can act without being asked each time.
 4. Board the ship (click it) to open its teardown, processes, Docker, files, console and crew.

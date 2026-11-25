@@ -17,7 +17,7 @@ const servers = [
 ];
 const spec = {
   'web-01': { cores: 8, mem: 16, cpu: 28, disk: 0.61, gpus: 0, docker: true },
-  'gpu-lab': { cores: 32, mem: 128, cpu: 74, disk: 0.48, gpus: 2, docker: true },
+  'gpu-lab': { cores: 64, mem: 512, cpu: 74, disk: 0.48, gpus: 8, docker: true },
   'db-02': { cores: 4, mem: 32, cpu: 45, disk: 0.93, gpus: 0, docker: false },
   'edge-03': { cores: 2, mem: 2, cpu: 10, disk: 0.3, gpus: 0, docker: false },
   'backup': { cores: 4, mem: 8, cpu: 3, disk: 0.7, gpus: 0, docker: false },
@@ -47,7 +47,7 @@ function snap(s, k) {
     ioRead: Math.max(0, 1.2e6 + wav(9e5, 2)), ioWrite: Math.max(0, 4e6 + wav(3e6, 4)),
     procs: [['nginx', 'www-data', 12.3, 1.2], ['postgres', 'postgres', 8.1, 6.3], ['python3', 'root', 5.5, 3.1], ['node', 'deploy', 4.2, 2.2], ['dockerd', 'root', 1.9, 1.4], ['sshd', 'root', 0.3, 0.1], ['systemd', 'root', 0.1, 0.2]]
       .map(([c, u, p, m], i) => ({ pid: 1000 + i * 37, user: u, cpu: p, mem: m, rss: m * 1.6e8, command: c })),
-    tcp: 132, gpus: Array.from({ length: sp.gpus }, (_, i) => ({ index: i, name: 'NVIDIA RTX A6000', util: Math.max(0, Math.min(100, 70 + wav(25, 2 + i))), memUsed: 3.1e10, memTotal: 5.1e10, temp: 71 + i * 4, power: 260 })),
+    tcp: 132, gpus: Array.from({ length: sp.gpus }, (_, i) => ({ index: i, name: 'NVIDIA A100-PCIE-40GB', util: Math.max(0, Math.min(100, 70 + wav(25, 2 + i))), memUsed: 2.6e10 + i * 1.2e9, memTotal: 4.0e10, temp: 58 + i * 4, power: 180 + i * 9 })),
     hasDocker: sp.docker,
   };
 }

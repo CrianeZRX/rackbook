@@ -92,7 +92,7 @@ Descarga el instalador para tu sistema en **[Releases](https://github.com/Criane
 
 ## Primeros pasos
 
-1. Pulsa **+ Nueva nave** e indica host, puerto y usuario.
+1. Pulsa **+ Nueva nave** e indica host, puerto y usuario. O pulsa **Importar de configuración…** para elegir de una vez servidores de tu `~/.ssh/config` (y de las sesiones de PuTTY en Windows).
 2. Elige **Clave** (si dejas la ruta vacía, Rackbook prueba tus claves habituales de `~/.ssh`) o **Contraseña**.
 3. Rackbook comprueba lo que permite `sudo` y convierte la cuenta en **capitán** o **navegante**. Los capitanes pueden guardar una contraseña de sudo para no tener que escribirla cada vez.
 4. Aborda la nave (haz clic en ella) para abrir su despiece, procesos, Docker, archivos, consola y tripulación.

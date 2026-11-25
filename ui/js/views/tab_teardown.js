@@ -89,7 +89,17 @@ export function mount(el, { id }) {
       cc('net', 'Network', '网络吞吐', s ? '↓ ' + F.rate(s.rxRate) : '—', s ? `↑ ${F.rate(s.txRate)}   蓝 = 下行，红 = 上行` : ''),
       cc('disk', 'Disk I/O', '磁盘读写', s ? '读 ' + F.rate(s.ioRead) : '—', s ? `写 ${F.rate(s.ioWrite)}   绿 = 读，棕 = 写` : ''),
     ];
-    if (s?.gpus?.length) charts.push(cc('gpu', 'GPU', '显卡占用（平均）', F.pct(gpuUtil(s)), `${s.gpus.length} 块 · ${s.gpus.map((g) => g.name).join(', ')}`));
+    if (s?.gpus?.length) {
+      // "8 × NVIDIA A100-PCIE-40GB" rather than the same name eight times
+      const models = Object.entries(s.gpus.reduce((m, g) => ((m[g.name] = (m[g.name] || 0) + 1), m), {})).map(([n, c]) => (c > 1 ? `${c} × ${n}` : n)).join(' · ');
+      charts.push(cc('gpu', 'GPU', '显卡占用（平均）', F.pct(gpuUtil(s)), models));
+      // the card beside it: one row per GPU, so the grid has no hole and each card is readable at a glance
+      const hot = (t) => (t == null ? '' : t >= 85 ? 'red' : '');
+      charts.push(`<div class="card sk${hero.focus === 'gpu' ? ' lit' : ''}"><div class="head"><span class="kicker">GPUs</span><span class="h">逐块显卡</span></div>
+        <div style="overflow:auto;max-height:200px"><table class="sheet"><tr><th>#</th><th style="width:38%">占用</th><th class="r">显存</th><th class="r">温度</th><th class="r">功耗</th></tr>` +
+        s.gpus.map((g) => `<tr><td class="nw"><b>${g.index}</b></td><td><div class="row" style="gap:6px">${bar(g.util / 100, C.pink, 9)}<span class="nw" style="width:34px;text-align:right">${F.pct(g.util)}</span></div></td><td class="r">${F.bytes(g.memUsed)} / ${F.bytes(g.memTotal)}</td><td class="r ${hot(g.temp)}">${g.temp == null ? '—' : Math.round(g.temp) + '°C'}</td><td class="r">${g.power == null ? '—' : Math.round(g.power) + ' W'}</td></tr>`).join('') +
+        `</table></div></div>`);
+    }
     const ch = el.querySelector('#charts');
     ch.innerHTML = charts.join('');
     const draw = (k, lines, maxY, fmt) => { const c = ch.querySelector(`[data-c="${k}"]`); if (c) lineChart(c, lines, maxY, fmt); };
@@ -99,11 +109,11 @@ export function mount(el, { id }) {
     draw('disk', [{ values: hist.ioR, color: C.sage }, { values: hist.ioW, color: C.wood, fill: false }], null, F.rate);
     draw('gpu', [{ values: hist.gpu, color: C.pink }], 100, F.pct);
 
-    el.querySelector('#disks').innerHTML = card(s && s.mounts.length ? `<table class="sheet"><tr><th>挂载点</th><th style="width:40%">用量</th><th class="r">已用 / 总量</th><th class="r">%</th></tr>` +
-      s.mounts.map((m) => `<tr class="${mountFrac(m) > 0.9 ? 'red' : ''}"><td class="hand"><b>${esc(m.mount)}</b><div class="mono muted" style="font-size:10px">${esc(m.fs)} · ${esc(m.type)}</div></td><td>${bar(mountFrac(m), null, 11)}</td><td class="r">${F.bytes(m.used)} / ${F.bytes(m.used + m.avail)}</td><td class="r"><b>${F.pct(mountFrac(m) * 100)}</b></td></tr>`).join('') + '</table>'
+    el.querySelector('#disks').innerHTML = card(s && s.mounts.length ? `<table class="sheet"><tr><th>挂载点</th><th>用量</th><th class="r">已用 / 总量</th><th class="r">%</th></tr>` +
+      s.mounts.map((m) => `<tr class="${mountFrac(m) > 0.9 ? 'red' : ''}"><td class="hand name" title="${esc(m.mount)}"><b data-notr>${esc(m.mount)}</b><div class="mono muted" data-notr style="font-size:10px">${esc(m.fs)} · ${esc(m.type)}</div></td><td style="min-width:90px">${bar(mountFrac(m), null, 11)}</td><td class="r">${F.bytes(m.used)} / ${F.bytes(m.used + m.avail)}</td><td class="r"><b>${F.pct(mountFrac(m) * 100)}</b></td></tr>`).join('') + '</table>'
       : '<div class="muted">没有可显示的挂载点。</div>', { kicker: 'Storage', title: '挂载点', lit: hero.focus === 'disk' });
     el.querySelector('#nets').innerHTML = card(s && s.nets.length ? `<table class="sheet"><tr><th>名称</th><th class="r">下行</th><th class="r">上行</th><th class="r">累计 收 / 发</th></tr>` +
-      s.nets.slice(0, 10).map((n) => `<tr><td><b>${esc(n.name)}</b></td><td class="r">${F.rate(n.rxRate)}</td><td class="r">${F.rate(n.txRate)}</td><td class="r">${F.bytes(n.rx)} / ${F.bytes(n.tx)}</td></tr>`).join('') + '</table>'
+      s.nets.slice(0, 10).map((n) => `<tr><td class="name" title="${esc(n.name)}"><b data-notr>${esc(n.name)}</b></td><td class="r">${F.rate(n.rxRate)}</td><td class="r">${F.rate(n.txRate)}</td><td class="r">${F.bytes(n.rx)} / ${F.bytes(n.tx)}</td></tr>`).join('') + '</table>'
       : '<div class="muted">没有网卡数据。</div>', { kicker: 'Interfaces', title: '网卡', lit: hero.focus === 'net' });
     sketchAll(el);
   };

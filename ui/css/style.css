@@ -103,7 +103,7 @@ input, textarea, select, button { font: inherit; color: inherit; }
 .meter { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10px; }
 .meter .lab { width: 34px; font-weight: 700; }
 .meter .val { width: 42px; text-align: right; }
-.bar { position: relative; flex: 1; height: 9px; border: 1px solid rgba(35,30,22,.85); border-radius: 1px 2px 1px 2px; background: transparent; overflow: hidden; }
+.bar { display: block; min-width: 40px; position: relative; flex: 1; height: 9px; border: 1px solid rgba(35,30,22,.85); border-radius: 1px 2px 1px 2px; background: transparent; overflow: hidden; }
 .bar > i { position: absolute; left: 0; top: 0; bottom: 0; clip-path: polygon(0 8%, 100% 0, 97% 100%, 0 92%); opacity: .92; }
 
 .badge { display: inline-block; font-weight: 700; font-size: 13px; padding: 0 6px; transform: rotate(-3deg); border: 1.2px solid currentColor; border-radius: 2px 1px 3px 1px; white-space: nowrap; }
@@ -187,3 +187,11 @@ body.float #floatcard { margin: 8px; padding: 12px; width: 280px; position: rela
 
 /* a badge inside a column keeps its own width instead of stretching across it */
 .col > .badge { align-self: flex-start; }
+
+/* numbers in tables never wrap; long names give way instead */
+table.sheet td.r, table.sheet th.r, table.sheet td.nw, table.sheet th.nw { white-space: nowrap; }
+table.sheet td.name { max-width: 0; width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+table.sheet td.name > * { overflow: hidden; text-overflow: ellipsis; }
+/* chart headline: the big number stays on one line, the note moves below it when space runs out */
+.card > .row.base { flex-wrap: wrap; row-gap: 0; }
+.card > .row.base > .big { white-space: nowrap; }
