@@ -1,4 +1,7 @@
 name: Pages
+# Publishes the UI demo (/demo/) and the 3D teardown page (/teardown/) to the gh-pages branch.
+# In Settings → Pages, set Source to "Deploy from a branch", branch gh-pages, folder / (root).
+# (A plain branch push avoids the artifact API that actions/deploy-pages depends on.)
 on:
   push:
     branches: [main]
@@ -6,16 +9,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency: {group: pages, cancel-in-progress: true}
 
 jobs:
-  deploy:
+  publish:
     runs-on: ubuntu-latest
-    environment: {name: github-pages, url: '${{ steps.deploy.outputs.page_url }}'}
     steps:
       - uses: actions/checkout@v4
       - name: Assemble the site
@@ -23,15 +23,15 @@ jobs:
           mkdir -p _site/demo _site/teardown
           cp -r ui/* _site/demo/
           cp docs/teardown/index.html _site/teardown/index.html
+          touch _site/.nojekyll
           cat > _site/index.html <<'HTML'
           <!doctype html><meta charset="utf-8"><title>Rackbook</title>
           <meta http-equiv="refresh" content="0; url=https://github.com/CrianeZRX/rackbook">
           <a href="https://github.com/CrianeZRX/rackbook">Rackbook on GitHub</a>
           HTML
-      - uses: actions/configure-pages@v5
-      # one artifact name per attempt, so "Re-run jobs" doesn't find two artifacts with the same name
-      - uses: actions/upload-pages-artifact@v3
-        with: {path: _site, name: 'github-pages-${{ github.run_attempt }}'}
-      - id: deploy
-        uses: actions/deploy-pages@v4
-        with: {artifact_name: 'github-pages-${{ github.run_attempt }}'}
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./_site
+          force_orphan: true
+          commit_message: 'Publish site from ${{ github.sha }}'
