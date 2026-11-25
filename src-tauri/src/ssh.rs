@@ -1,0 +1,252 @@
+//! SSH connections built on russh: one long-lived authenticated connection per ship,
+//! every command is a new channel on it (the Windows equivalent of the macOS ControlMaster).
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use anyhow::{anyhow, bail, Result};
+use russh::client::{self, KeyboardInteractiveAuthResponse};
+use russh::keys::{load_secret_key, HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
+use russh::{ChannelMsg, Disconnect};
+
+/// Trust-on-first-use store of host key fingerprints, keyed by "host:port".
+pub struct KnownHosts {
+    path: PathBuf,
+    map: Mutex<HashMap<String, String>>,
+}
+
+impl KnownHosts {
+    pub fn load(path: PathBuf) -> Self {
+        let map = std::fs::read(&path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        KnownHosts { path, map: Mutex::new(map) }
+    }
+    fn check(&self, host: &str, fp: &str) -> Result<(), String> {
+        let mut m = self.map.lock().unwrap();
+        match m.get(host) {
+            Some(known) if known == fp => Ok(()),
+            Some(known) => Err(known.clone()),
+            None => {
+                m.insert(host.to_string(), fp.to_string());
+                if let Ok(b) = serde_json::to_vec_pretty(&*m) {
+                    let _ = std::fs::write(&self.path, b);
+                }
+                Ok(())
+            }
+        }
+    }
+    pub fn forget(&self, host: &str) {
+        let mut m = self.map.lock().unwrap();
+        m.remove(host);
+        if let Ok(b) = serde_json::to_vec_pretty(&*m) {
+            let _ = std::fs::write(&self.path, b);
+        }
+    }
+}
+
+struct Client {
+    known: Arc<KnownHosts>,
+    host: String,
+    mismatch: Arc<Mutex<Option<String>>>,
+}
+
+impl client::Handler for Client {
+    type Error = russh::Error;
+
+    async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
+        let fp = match key {
+            PublicKeyOrCertificate::PublicKey { key, .. } => key.fingerprint(HashAlg::Sha256).to_string(),
+            PublicKeyOrCertificate::Certificate(c) => c.public_key().fingerprint(HashAlg::Sha256).to_string(),
+        };
+        match self.known.check(&self.host, &fp) {
+            Ok(()) => Ok(true),
+            Err(old) => {
+                *self.mismatch.lock().unwrap() = Some(format!("之前记录的是 {old}，现在是 {fp}"));
+                Ok(false)
+            }
+        }
+    }
+}
+
+pub enum Auth {
+    /// key file (None = try ~/.ssh/id_ed25519, id_ecdsa, id_rsa) and its passphrase
+    Key { path: Option<String>, pass: Option<String> },
+    Password(String),
+}
+
+pub struct Endpoint {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub auth: Auth,
+}
+
+pub struct ExecOut {
+    pub out: Vec<u8>,
+    pub err: Vec<u8>,
+    pub code: i32,
+}
+
+pub struct Conn {
+    handle: client::Handle<Client>,
+}
+
+fn default_keys() -> Vec<PathBuf> {
+    let Some(home) = dirs::home_dir() else { return vec![] };
+    ["id_ed25519", "id_ecdsa", "id_rsa"]
+        .iter()
+        .map(|n| home.join(".ssh").join(n))
+        .filter(|p| p.exists())
+        .collect()
+}
+
+fn expand(p: &str) -> PathBuf {
+    if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\")) {
+        if let Some(h) = dirs::home_dir() {
+            return h.join(rest);
+        }
+    }
+    PathBuf::from(p)
+}
+
+pub fn friendly(e: &str) -> String {
+    let l = e.to_lowercase();
+    if l.contains("refused") { return "连接被拒（端口对吗？sshd 在运行吗？）".into(); }
+    if l.contains("timed out") || l.contains("timeout") { return "连接超时".into(); }
+    if l.contains("no such host") || l.contains("failed to lookup") || l.contains("not known") || l.contains("resolve") {
+        return "主机名解析不了".into();
+    }
+    if l.contains("unreachable") { return "网络不可达".into(); }
+    if l.contains("unknownkey") || l.contains("unknown key") { return "主机指纹对不上".into(); }
+    e.to_string()
+}
+
+impl Conn {
+    pub async fn connect(ep: &Endpoint, known: Arc<KnownHosts>) -> Result<Conn> {
+        let config = Arc::new(client::Config {
+            inactivity_timeout: None,
+            keepalive_interval: Some(Duration::from_secs(15)),
+            keepalive_max: 3,
+            nodelay: true,
+            ..Default::default()
+        });
+        let mismatch = Arc::new(Mutex::new(None));
+        let hostkey = format!("{}:{}", ep.host, ep.port);
+        let handler = Client { known, host: hostkey, mismatch: mismatch.clone() };
+        let connecting = client::connect(config, (ep.host.as_str(), ep.port), handler);
+        let mut handle = match tokio::time::timeout(Duration::from_secs(12), connecting).await {
+            Err(_) => bail!("连接超时"),
+            Ok(Err(e)) => {
+                if let Some(m) = mismatch.lock().unwrap().clone() {
+                    bail!("主机指纹变了，可能被冒充（{m}）。确认无误后可在编辑页「忘记指纹」");
+                }
+                bail!(friendly(&e.to_string()))
+            }
+            Ok(Ok(h)) => h,
+        };
+
+        let ok = match &ep.auth {
+            Auth::Password(pw) => {
+                let r = handle.authenticate_password(ep.user.clone(), pw.clone()).await?;
+                if r.success() {
+                    true
+                } else {
+                    // Many servers only offer keyboard-interactive for passwords.
+                    let mut resp = handle.authenticate_keyboard_interactive_start(ep.user.clone(), None).await?;
+                    let mut ok = false;
+                    for _ in 0..4 {
+                        match resp {
+                            KeyboardInteractiveAuthResponse::Success => { ok = true; break; }
+                            KeyboardInteractiveAuthResponse::Failure { .. } => break,
+                            KeyboardInteractiveAuthResponse::InfoRequest { ref prompts, .. } => {
+                                let answers = prompts.iter().map(|_| pw.clone()).collect();
+                                resp = handle.authenticate_keyboard_interactive_respond(answers).await?;
+                            }
+                        }
+                    }
+                    ok
+                }
+            }
+            Auth::Key { path, pass } => {
+                let candidates: Vec<PathBuf> = match path {
+                    Some(p) if !p.trim().is_empty() => vec![expand(p.trim())],
+                    _ => default_keys(),
+                };
+                if candidates.is_empty() {
+                    bail!("没有找到私钥：在 C:\\Users\\你\\.ssh 下放 id_ed25519 / id_rsa，或在编辑页指定私钥文件");
+                }
+                let mut ok = false;
+                let mut last_err = String::new();
+                for p in candidates {
+                    let key = match load_secret_key(&p, pass.as_deref()) {
+                        Ok(k) => k,
+                        Err(e) => {
+                            let s = e.to_string();
+                            last_err = if s.to_lowercase().contains("encrypted") || s.to_lowercase().contains("passphrase") {
+                                format!("私钥 {} 有口令保护，请在编辑页填写私钥口令", p.display())
+                            } else {
+                                format!("读不了私钥 {}：{s}", p.display())
+                            };
+                            continue;
+                        }
+                    };
+                    let hash = handle.best_supported_rsa_hash().await.ok().flatten().flatten();
+                    let r = handle
+                        .authenticate_publickey(ep.user.clone(), PrivateKeyWithHashAlg::new(Arc::new(key), hash))
+                        .await?;
+                    if r.success() { ok = true; break; }
+                    last_err = "公钥被拒（把公钥加入服务器的 authorized_keys）".into();
+                }
+                if !ok && !last_err.is_empty() { bail!(last_err) }
+                ok
+            }
+        };
+        if !ok {
+            bail!(match ep.auth {
+                Auth::Password(_) => "密码被拒（密码不对，或服务器关闭了密码登录）",
+                Auth::Key { .. } => "认证被拒（检查用户名和私钥）",
+            })
+        }
+        Ok(Conn { handle })
+    }
+
+    pub fn alive(&self) -> bool {
+        !self.handle.is_closed()
+    }
+
+    pub async fn exec(&self, cmd: &str, stdin: Option<&[u8]>, timeout: Duration) -> Result<ExecOut> {
+        let run = async {
+            let mut ch = self.handle.channel_open_session().await?;
+            ch.exec(true, cmd).await?;
+            if let Some(data) = stdin {
+                ch.data(data).await?;
+            }
+            ch.eof().await?;
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let mut code: Option<u32> = None;
+            while let Some(msg) = ch.wait().await {
+                match msg {
+                    ChannelMsg::Data { ref data } => out.extend_from_slice(data),
+                    ChannelMsg::ExtendedData { ref data, .. } => err.extend_from_slice(data),
+                    ChannelMsg::ExitStatus { exit_status } => code = Some(exit_status),
+                    ChannelMsg::ExitSignal { .. } => code = code.or(Some(255)),
+                    _ => {}
+                }
+            }
+            Ok::<ExecOut, anyhow::Error>(ExecOut { out, err, code: code.map(|c| c as i32).unwrap_or(-1) })
+        };
+        match tokio::time::timeout(timeout, run).await {
+            Ok(r) => r,
+            Err(_) => Err(anyhow!("超时（{} 秒）", timeout.as_secs())),
+        }
+    }
+
+    pub async fn close(&self) {
+        let _ = self.handle.disconnect(Disconnect::ByApplication, "bye", "en").await;
+    }
+}

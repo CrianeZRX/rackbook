@@ -1,0 +1,34 @@
+[package]
+name = "rackbook"
+version = "2.1.0"
+edition = "2021"
+description = "Rackbook — hand-drawn server fleet monitor"
+
+[lib]
+name = "rackbook_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+russh = { version = "0.65", default-features = false, features = ["flate2", "ring", "rsa"] }
+anyhow = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+regex = "1"
+dirs = "6"
+tar = "0.4"
+flate2 = "1"
+
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
