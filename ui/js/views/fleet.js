@@ -1,10 +1,11 @@
 import { invoke } from '../api.js';
-import { S, liveOf, health, healthLabel, title, display, active, alerts, memFrac, worstDisk, mountFrac, shipClass, onlineCount, phaseText, gpuUtil } from '../state.js';
+import { S, liveOf, health, healthLabel, title, display, active, alerts, memFrac, worstDisk, mountFrac, shipClass, onlineCount, phaseText, gpuUtil, SHIP_CLASS_TIERS, shipClassThreshold } from '../state.js';
 import { card, meter, dot, badge, btn, delegate, titleBlock, bar } from '../ui.js';
 import { drawChart, chartHit, miniShip } from '../ships.js';
 import { C, fitCanvas, ink, marker, dot as kdot } from '../kit.js';
 import * as F from '../fmt.js';
 import { esc } from '../fmt.js';
+import { tr } from '../i18n.js';
 
 function spark(cv, values, color, maxY) {
   const { ctx, w, h } = fitCanvas(cv);
@@ -22,7 +23,7 @@ function spark(cv, values, color, maxY) {
 
 export function mount(el, { go, editServer }) {
   el.innerHTML = `<div class="page">
-    <div class="row" style="align-items:flex-end">
+    <div class="row fleet-heading" style="align-items:flex-end">
       <div class="grow" id="fTitle"></div>
       <div class="col" style="align-items:flex-end">
         <div class="row" id="legend"></div>
@@ -33,7 +34,7 @@ export function mount(el, { go, editServer }) {
     <div id="chartCard" class="card sk" style="gap:8px">
       <div class="head"><span class="kicker">Star chart</span><span class="h">编队航行中（点舰船登舰）</span></div>
       <canvas id="chart" style="width:100%;height:520px;cursor:pointer"></canvas>
-      <div class="foot">舰级按规模定：侦察艇 ≤2 核、护卫舰、巡洋舰 ≥9 核或 24 GB、母舰 ≥32 核或 128 GB。尾焰长度随 CPU 负载，蓝→金→红；虚线护盾表示忙碌或吃紧；蓝点是网络流量。旗舰为核数最多的在航舰船。</div>
+      <div class="foot"><div id="class-guide" data-notr></div><div>尾焰长度随 CPU 负载，蓝→金→红；虚线护盾表示忙碌或吃紧；蓝点是网络流量。旗舰是未停泊舰船中核数最多的一艘。</div></div>
     </div>
     <div id="totals" class="row" style="gap:18px;align-items:stretch"></div>
     <div class="kicker" id="catTitle">舰船名录</div>
@@ -42,6 +43,7 @@ export function mount(el, { go, editServer }) {
   </div>`;
   el.querySelector('#legend').innerHTML = ['ok', 'warn', 'hot', 'down', 'parked'].map((h) => `<span class="row" style="gap:4px">${dot(h)}<span>${healthLabel[h]}</span></span>`).join('&nbsp;&nbsp;');
   const cv = el.querySelector('#chart');
+  const classGuide = el.querySelector('#class-guide');
   let raf = 0, alive = true;
   const loop = (t) => { if (!alive) return; drawChart(cv, t / 1000); raf = requestAnimationFrame(loop); };
   raf = requestAnimationFrame(loop);
@@ -58,15 +60,22 @@ export function mount(el, { go, editServer }) {
   });
 
   const update = () => {
+    const thresholds = SHIP_CLASS_TIERS.map((tier) => {
+      const { cores, memoryGib } = shipClassThreshold(tier);
+      return tr(`${tier.name} ≥${cores} 核或 ${memoryGib} GiB`);
+    }).join(' · ');
+    const guide = tr('舰级从高到低判定') + ' · ' + thresholds + ' · ' + tr('其余归为侦察艇');
+    if (classGuide.textContent !== guide) classGuide.textContent = guide;
     const lives = S.servers.map((s) => liveOf(s.id));
     const nAlerts = lives.reduce((n, l) => n + alerts(l).length, 0);
-    el.querySelector('#fTitle').innerHTML = titleBlock('Starfleet · 星际舰队', '第一舰队',
-      `${S.servers.length} 艘 · ${onlineCount()} 艘在航 · ${S.servers.filter((s) => s.paused).length} 艘停泊 · ${nAlerts} 处需要留意`);
+    const name = S.prefs.fleetName?.trim();
+    el.querySelector('#fTitle').innerHTML = titleBlock('Starfleet · 星际舰队', name || '第一舰队',
+      `${S.servers.length} 艘 · ${onlineCount()} 艘在航 · ${S.servers.filter((s) => s.paused).length} 艘停泊 · ${nAlerts} 处需要留意`, !!name);
     const empty = !S.servers.length;
     el.querySelector('#chartCard').classList.toggle('hidden', empty);
     el.querySelector('#totals').classList.toggle('hidden', empty);
     el.querySelector('#catTitle').classList.toggle('hidden', empty);
-    el.querySelector('#empty').innerHTML = empty ? card(`<div class="row top" style="gap:24px"><div class="col" style="font-size:17px">
+    el.querySelector('#empty').innerHTML = empty ? card(`<div class="row top" style="gap:24px"><div class="col" style="font-size:1.0625rem">
         <div>Rackbook 用内置的 SSH 去读服务器的 /proc，不需要在服务器上安装任何东西。</div>
         <div>1. 点「＋ 新舰船」，填主机和端口。</div>
         <div>2. 添加登舰账户：用密钥（自动找 C:\\Users\\你\\.ssh\\id_ed25519）或密码。</div>
@@ -92,18 +101,18 @@ export function mount(el, { go, editServer }) {
         <div class="row top" style="gap:12px">
           <canvas class="mini" data-id="${s.id}" style="width:104px;height:76px;flex:none"></canvas>
           <div class="col grow" style="gap:2px">
-            <div class="kicker" style="font-size:12px">No.${i + 1} · ${sn ? cls.name : '舰船'} · ${healthLabel[hl]}</div>
-            <div class="h" style="font-size:21px" data-notr>${esc(title(s))}</div>
-            <div class="row">${badge(a?.privilege || 'unknown', true)}<span class="mono muted" style="font-size:11px">${esc(display(s))}</span></div>
-            ${sn ? `<div class="muted" style="font-size:14px">${sn.cores} 核${sn.gpus.length ? ` · ${sn.gpus.length} GPU` : ''} · ${F.bytes(sn.memTotal)} · 运行 ${F.uptime(sn.uptime)}</div>` : ''}
+            <div class="kicker" style="font-size:0.75rem">No.${i + 1} · ${sn ? cls.name : '舰船'} · ${healthLabel[hl]}</div>
+            <div class="h" style="font-size:1.3125rem" data-notr>${esc(title(s))}</div>
+            <div class="row">${badge(a?.privilege || 'unknown', true)}<span class="mono muted" style="font-size:0.6875rem">${esc(display(s))}</span></div>
+            ${sn ? `<div class="muted" style="font-size:0.875rem">${sn.cores} 核${sn.gpus.length ? ` · ${sn.gpus.length} GPU` : ''} · ${F.bytes(sn.memTotal)} · 运行 ${F.uptime(sn.uptime)}</div>` : ''}
           </div>
         </div>
         ${online ? meter('CPU', sn.cpu / 100, F.pct(sn.cpu)) + meter('MEM', memFrac(sn), F.pct(memFrac(sn) * 100)) + meter('DISK', wd ? mountFrac(wd) : 0, F.pct((wd ? mountFrac(wd) : 0) * 100))
           + (sn.gpus.length ? meter('GPU', gpuUtil(sn) / 100, F.pct(gpuUtil(sn)), C.pink) : '')
           + `<canvas class="spark" data-id="${s.id}" style="width:100%;height:34px"></canvas>
-             <div class="row mono" style="font-size:11px"><span>↓ ${F.rate(sn.rxRate)}</span><span class="spacer"></span><span>↑ ${F.rate(sn.txRate)}</span><span class="spacer"></span><span>load ${F.num(sn.load[0] || 0)}</span></div>
+             <div class="row mono" style="font-size:0.6875rem"><span>↓ ${F.rate(sn.rxRate)}</span><span class="spacer"></span><span>↑ ${F.rate(sn.txRate)}</span><span class="spacer"></span><span>load ${F.num(sn.load[0] || 0)}</span></div>
              ${alerts(l).map((a) => `<div class="red" style="font-weight:700">● ${esc(a)}</div>`).join('')}`
-          : `<div class="${l.phase === 'offline' ? 'red' : 'muted'}" style="font-size:16px">${esc(phaseText(l))}</div>`}`,
+          : `<div class="${l.phase === 'offline' ? 'red' : 'muted'}" style="font-size:1rem">${esc(phaseText(l))}</div>`}`,
       { lit: hl === 'hot', cls: 'click', attrs: `data-act="open" data-id="${s.id}"` });
     }).join('');
     el.querySelectorAll('canvas.mini').forEach((c) => { const s = S.servers.find((x) => x.id === c.dataset.id); miniShip(c, s, liveOf(s.id)); });

@@ -23,7 +23,7 @@ export function openGpu(id, index) {
       g.temp != null ? meter('温度', Math.min(1, g.temp / 95), `${Math.round(g.temp)}°C`, heatColor(g.temp)) : '',
       g.power != null ? meter('功耗', pw ?? 0, `${Math.round(g.power)} W${g.powerLimit ? ' / ' + Math.round(g.powerLimit) + ' W' : ''}`, C.gold) : '',
       g.fan != null ? meter('风扇', g.fan / 100, F.pct(g.fan), C.sage) : '',
-      g.clockSm != null ? `<div class="row mono muted" style="font-size:11px"><span>SM 频率</span><span class="spacer"></span><span>${Math.round(g.clockSm)} MHz</span></div>` : '',
+      g.clockSm != null ? `<div class="row mono muted" style="font-size:0.6875rem"><span>SM 频率</span><span class="spacer"></span><span>${Math.round(g.clockSm)} MHz</span></div>` : '',
     ].join('');
   };
   const procHtml = () => {
@@ -65,14 +65,14 @@ export function openGpu(id, index) {
   const g0 = gpu();
   if (!g0) return;
   modal(`
-    <div class="row base"><span class="kicker">Engine #${index}</span><span class="h" style="font-size:24px" data-notr>${esc(g0.name)}</span><span class="spacer"></span>${btn('关闭', { act: 'close', cls: 'chip' })}</div>
+    <div class="row base"><span class="kicker">Engine #${index}</span><span class="h" style="font-size:1.5rem" data-notr>${esc(g0.name)}</span><span class="spacer"></span>${btn('关闭', { act: 'close', cls: 'chip' })}</div>
     <div class="row top" style="gap:18px;align-items:stretch">
       <div class="gpu-stand" style="flex:1 1 360px"><canvas id="gscene" style="width:100%;height:360px"></canvas></div>
       <div class="col" style="flex:1 1 300px;gap:8px"><div id="gstats" class="col gstats" style="gap:8px"></div>
         <div class="foot">尾焰长度 = 占用，喷管颜色 = 温度，燃料罐水位 = 显存，涡轮泵转速 = 风扇。</div></div>
     </div>
     <div class="grid2" style="gap:12px">
-      ${[['util', '推力 · 占用'], ['mem', '燃料 · 显存'], ['temp', '温度'], ['power', '功耗']].map(([k, t]) => `<div class="card sk" style="padding:8px 12px"><div class="head"><span class="h" style="font-size:16px">${t}</span></div><canvas data-gc="${k}" style="width:100%;height:110px"></canvas></div>`).join('')}
+      ${[['util', '推力 · 占用'], ['mem', '燃料 · 显存'], ['temp', '温度'], ['power', '功耗']].map(([k, t]) => `<div class="card sk" style="padding:8px 12px"><div class="head"><span class="h" style="font-size:1rem">${t}</span></div><canvas data-gc="${k}" style="width:100%;height:110px"></canvas></div>`).join('')}
     </div>
     <div class="card sk"><div class="head"><span class="kicker">Passengers</span><span class="h">这块卡上的进程</span><span class="spacer"></span>${btn('清点乘客', { act: 'procs', cls: 'chip' })}</div><div id="gprocs">${procHtml()}</div></div>`,
   {

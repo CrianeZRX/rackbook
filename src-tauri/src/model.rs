@@ -275,6 +275,20 @@ pub struct Live {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShipClassThreshold {
+    pub cores: u32,
+    pub memory_gib: f64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ShipClassThresholds {
+    pub carrier: Option<ShipClassThreshold>,
+    pub cruiser: Option<ShipClassThreshold>,
+    pub frigate: Option<ShipClassThreshold>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Prefs {
     pub background_on_close: bool,
@@ -287,6 +301,9 @@ pub struct Prefs {
     pub float_x: Option<i32>,
     pub float_y: Option<i32>,
     pub lang: String,
+    pub font_scale: u16,
+    pub fleet_name: String,
+    pub ship_class_thresholds: Option<ShipClassThresholds>,
 }
 
 impl Default for Prefs {
@@ -302,6 +319,9 @@ impl Default for Prefs {
             float_x: None,
             float_y: None,
             lang: String::new(),
+            font_scale: 100,
+            fleet_name: String::new(),
+            ship_class_thresholds: None,
         }
     }
 }

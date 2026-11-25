@@ -24,7 +24,7 @@ const TABS = [
 
 export function mount(el, { id, editServer }) {
   el.innerHTML = `<div style="display:flex;flex-direction:column;min-height:100%">
-    <div id="dhead" class="row" style="align-items:flex-end;padding:26px 28px 12px;gap:14px"></div>
+    <div id="dhead" class="row detail-head"></div>
     <div class="tabs" id="dtabs"></div>
     <div id="dbody" style="flex:1;min-height:0;display:flex;flex-direction:column"></div>
   </div>`;
@@ -37,7 +37,7 @@ export function mount(el, { id, editServer }) {
     const idx = S.servers.findIndex((x) => x.id === id) + 1;
     el.querySelector('#dhead').innerHTML = `
       <div class="grow">${titleBlock(`Sheet No.${idx} · ${display(cfg)}`, title(cfg), subt, true)}</div>
-      <div class="row">${dot(hl, 14)}<b style="font-size:16px">${healthLabel[hl]}</b>${l.lastUpdate ? `<span class="mono muted" style="font-size:11px">· ${F.clock(new Date(l.lastUpdate * 1000))}</span>` : ''}</div>
+      <div class="row">${dot(hl, 14)}<b style="font-size:1rem">${healthLabel[hl]}</b>${l.lastUpdate ? `<span class="mono muted" style="font-size:0.6875rem">· ${F.clock(new Date(l.lastUpdate * 1000))}</span>` : ''}</div>
       <button class="btn sk" data-act="acct" id="acctBtn">${badge(a?.privilege || 'unknown', true)} ${esc(a?.label || a?.user || '—')} ▾</button>
       ${cfg.paused ? btn('⚡ 接通', { act: 'connect', cls: 'solid' }) : btn('↻ 刷新', { act: 'refresh' }) + btn('断开', { act: 'disconnect', cls: 'danger' })}
       ${btn('终端', { act: 'term' })}${btn('编辑', { act: 'edit' })}`;
@@ -52,7 +52,7 @@ export function mount(el, { id, editServer }) {
     body.innerHTML = '';
     const t = TABS.find((x) => x[0] === S.tab) || TABS[0];
     subKey = t[0];
-    sub = t[2].mount(body, { id, editServer });
+    sub = t[2].mount(body, { id, editServer, openCrew: () => setTab('crew') });
   };
 
   delegate(el.querySelector('#dhead'), {
@@ -67,7 +67,7 @@ export function mount(el, { id, editServer }) {
       popover(b, `<div class="kicker">以谁的身份登舰？</div>` + cfg.accounts.map((a) => `
         <div class="menu-item" data-act="pick" data-a="${a.id}">
           <span class="${a.id === cfg.activeAccount ? 'red' : 'muted'}">${a.id === cfg.activeAccount ? '●' : '○'}</span>
-          <div class="grow"><b style="font-size:16px">${esc(a.label || a.user)}</b><div class="muted" style="font-size:12px">${esc(a.user)} · ${a.auth === 'password' ? '密码登录' : '密钥登录'} · ${esc(privDetail(a.privilege))}</div></div>
+          <div class="grow"><b style="font-size:1rem">${esc(a.label || a.user)}</b><div class="muted" style="font-size:0.75rem">${esc(a.user)} · ${a.auth === 'password' ? '密码登录' : '密钥登录'} · ${esc(privDetail(a.privilege))}</div></div>
           ${badge(a.privilege, true)}</div>`).join('') +
         `<div class="rule-h" style="height:4px" data-ink="#7f9db3"></div>${btn('管理账户与角色…', { act: 'manage', cls: 'chip' })}`,
       { width: 380, onMount: (p, close) => delegate(p, {
@@ -77,15 +77,14 @@ export function mount(el, { id, editServer }) {
       sketchAll();
     },
   });
-  delegate(el.querySelector('#dtabs'), {
-    tab: (b) => {
-      const k = b.dataset.k, t = TABS.find((x) => x[0] === k), cfg = server(id), l = liveOf(id);
-      if (t[3] && cfg.paused) { say(`还不行：「${title(cfg)}」已断开停泊，${t[1]}要先点「接通」。`, 'refuse'); return; }
-      if (t[3] && l.phase !== 'online') { say(`还不行：「${title(cfg)}」还没接通，${t[1]}要等连上以后才能用。`, 'refuse'); return; }
-      if (k === 'docker' && !l.snap?.hasDocker) { say('还不行：这艘船上没找到 docker 命令，没有货舱可管。', 'refuse'); return; }
-      S.tab = k; head(); mountTab(); say(`翻到「${t[1]}」这一页。`);
-    },
-  });
+  const setTab = (k) => {
+    const t = TABS.find((x) => x[0] === k), cfg = server(id), l = liveOf(id);
+    if (t[3] && cfg.paused) { say(`还不行：「${title(cfg)}」已断开停泊，${t[1]}要先点「接通」。`, 'refuse'); return; }
+    if (t[3] && l.phase !== 'online') { say(`还不行：「${title(cfg)}」还没接通，${t[1]}要等连上以后才能用。`, 'refuse'); return; }
+    if (k === 'docker' && !l.snap?.hasDocker) { say('还不行：这艘船上没找到 docker 命令，没有货舱可管。', 'refuse'); return; }
+    S.tab = k; head(); mountTab(); say(`翻到「${t[1]}」这一页。`);
+  };
+  delegate(el.querySelector('#dtabs'), { tab: (b) => setTab(b.dataset.k) });
 
   head(); mountTab();
   return {

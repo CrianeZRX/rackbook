@@ -68,7 +68,7 @@ export function mount(el, { id }) {
     const shown = entries.filter((e) => (hidden || !e.name.startsWith('.')) && (!filter || e.name.toLowerCase().includes(filter)));
     el.querySelector('#flist').innerHTML = `<table class="sheet"><tr><th style="width:26px"></th><th>名称</th><th class="r">大小</th><th>修改时间</th><th>权限</th><th>所有者</th></tr>` +
       shown.map((e) => `<tr data-n="${esc(e.name)}" style="cursor:default;${sel === e.name ? 'background:rgba(244,184,41,.5)' : ''}"><td>${glyph(e.isDir ? 'd' : e.kind === 'l' ? 'l' : 'f')}</td>
-        <td class="hand" data-notr style="font-size:16px;${e.isDir ? 'font-weight:700' : ''}">${esc(e.name)}${e.kind === 'l' ? ' ↗' : ''}</td><td class="r">${e.isDir ? '—' : F.bytes(e.size)}</td><td>${F.date(e.mtime)}</td><td>${esc(e.perms)}</td><td>${esc(e.owner)}</td></tr>`).join('') + '</table>';
+        <td class="hand" data-notr style="font-size:1rem;${e.isDir ? 'font-weight:700' : ''}">${esc(e.name)}${e.kind === 'l' ? ' ↗' : ''}</td><td class="r">${e.isDir ? '—' : F.bytes(e.size)}</td><td>${F.date(e.mtime)}</td><td>${esc(e.perms)}</td><td>${esc(e.owner)}</td></tr>`).join('') + '</table>';
     el.querySelector('#ffoot').textContent = `${shown.length} 项 · 双击进入文件夹，或在可视化编辑器里打开文件 · 右键可下载、改名、删除` + (isTauri ? ' · 把资源管理器里的文件拖进来即上传' : '');
     sketchAll(el);
   };

@@ -13,15 +13,15 @@ export function mount(el, { id }) {
   const hist = []; let hi = -1;
   el.innerHTML = `<div class="page" style="padding-top:18px;flex:1;min-height:0">
     <div class="card sk"><div class="head"><span class="kicker">Console</span><span class="h">在这艘船上执行命令</span></div>
-      <div class="row"><b class="mono red" style="font-size:16px">$</b><input class="field sk mono" id="cmd" placeholder="输入命令后回车（非交互式；需要交互的程序请用「终端」）">${btn('执行', { act: 'run', cls: 'solid' })}${btn('在终端打开', { act: 'term' })}</div>
+      <div class="row"><b class="mono red" style="font-size:1rem">$</b><input class="field sk mono" id="cmd" placeholder="输入命令后回车（非交互式；需要交互的程序请用「终端」）">${btn('执行', { act: 'run', cls: 'solid' })}${btn('在终端打开', { act: 'term' })}</div>
       <div class="row" style="flex-wrap:wrap">${SNIPS.map((s) => btn(s, { act: 'snip', cls: 'chip', data: `data-s="${esc(s)}"` })).join('')}</div></div>
     <div class="receipt sk" id="rc"></div>
     <div class="row"><span class="foot">每条命令单独开一个 SSH 通道（复用连接），超时 120 秒。↑↓ 翻历史。</span><span class="spacer"></span>${btn('清空', { act: 'clear', cls: 'chip' })}</div></div>`;
   const input = el.querySelector('#cmd');
   const render = () => {
     const rc = el.querySelector('#rc');
-    rc.innerHTML = !runs.length ? '<div class="muted" style="font-size:17px">这里像一卷收据纸：每条命令和它的输出依次往下记。</div>'
-      : runs.map((r) => `<div style="margin-bottom:14px"><div class="row"><b class="mono sel" data-notr style="font-size:13px">$ ${esc(r.cmd)}</b><span class="spacer"></span><span class="mono muted" style="font-size:10px">${r.at}</span></div>
+    rc.innerHTML = !runs.length ? '<div class="muted" style="font-size:1.0625rem">这里像一卷收据纸：每条命令和它的输出依次往下记。</div>'
+      : runs.map((r) => `<div style="margin-bottom:14px"><div class="row"><b class="mono sel" data-notr style="font-size:0.8125rem">$ ${esc(r.cmd)}</b><span class="spacer"></span><span class="mono muted" style="font-size:0.625rem">${r.at}</span></div>
         ${r.out ? `<pre data-notr>${esc(r.out)}</pre>` : ''}${r.err?.trim() ? `<pre data-notr class="red">${esc(r.err)}</pre>` : ''}
         <div class="${r.code == null ? 'woodc' : r.code === 0 ? 'okc' : 'red'} small">${r.code == null ? '运行中…' : `退出码 ${r.code} · ${r.secs.toFixed(2)} 秒`}</div>
         <div class="rule-h" style="height:4px;margin-top:4px" data-ink="#7f9db3" data-width="0.8"></div></div>`).join('');

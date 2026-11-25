@@ -1,6 +1,6 @@
 [package]
 name = "rackbook"
-version = "2.3.0"
+version = "2.3.1"
 edition = "2021"
 description = "Rackbook — hand-drawn server fleet monitor"
 

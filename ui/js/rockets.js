@@ -3,7 +3,7 @@
 //
 // An engine reads at a glance: the plume's length is utilisation, the nozzle's colour is temperature
 // (cool → gold → rose), the tank's sight glass shows memory in use, the turbopump spins with the fan.
-import { C, ink, marker, hatch, dot, circlePts, text, polyPath, darker, lighter, alpha, mix, rng, fitCanvas } from './kit.js';
+import { C, ink, marker, hatch, dot, circlePts, text, darker, alpha, mix, rng, fitCanvas } from './kit.js';
 
 const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
 export const heatColor = (t) => (t == null ? C.sky : t < 60 ? C.sky : t < 75 ? mix(C.sky, C.gold, (t - 60) / 15) : t < 85 ? mix(C.gold, C.rose, (t - 75) / 10) : C.rose);
@@ -114,18 +114,109 @@ export function gpuDetailScene(cv, g, time) {
   engine(ctx, cx, top, eh, g, time, 31 + (g.index || 0));
 }
 
-/**
- * Users in orbit round the server. Each user is a little ship: its size follows memory, its exhaust and speed follow
- * CPU. users: [{ user, cpu (0-100 of machine), cores, rss, procs }], colours: user -> colour.
- * Returns hit areas [{ user, x, y, r }] for tooltips.
- */
-export function orbitScene(cv, users, colours, time, { center = 'SERVER', memTotal = 0 } = {}) {
+/** An astronaut in an open rocket, drawn with the same ink and washes as the fleet. */
+function astronaut(ctx, x, y, size, { colour, captain = false, plume = 0, angle = 0, standing = false }) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.scale(size / 72, size / 72);
+  const paint = (points, fill, seed) => {
+    marker(ctx, points, fill, { seed, off: [0.7, 0.7] });
+    ink(ctx, points, { closed: true, amp: 0.55, width: 1.6, seed, over: 0 });
+  };
+  if (standing) {
+    // Boots, gloves and the rounded life-support pack are kept readable at the smallest zoom.
+    paint([[-17, -6], [17, -6], [19, 15], [11, 20], [-11, 20], [-19, 15]], C.steel, 18);
+    paint([[-11, 14], [-2, 15], [-3, 30], [-15, 30], [-14, 24]], colour, 31);
+    paint([[2, 15], [11, 14], [14, 24], [15, 30], [3, 30]], colour, 32);
+    paint([[-14, -3], [-21, 4], [-23, 17], [-18, 20], [-12, 11]], C.cream, 33);
+    paint([[14, -3], [21, 3], [23, 14], [19, 18], [13, 12]], C.cream, 34);
+    paint([[-13, -5], [13, -5], [14, 11], [9, 20], [-9, 20], [-14, 11]], colour, 35);
+    ink(ctx, [[-10, 15], [10, 15]], { width: 1.1, seed: 36, over: 0 });
+  } else {
+    if (plume > 0) {
+      marker(ctx, [[-9, 22], [-6, 29], [0, 28 + plume], [7, 29], [9, 21]], C.gold, { seed: 17, off: [0, 0] });
+      ink(ctx, [[-6, 25], [0, 24 + plume * 0.65], [4, 25]], { color: C.rose, width: 1.5, seed: 18, over: 0 });
+    }
+    paint([[-14, 4], [-25, 19], [-24, 25], [-11, 19], [11, 19], [24, 25], [25, 19], [14, 4]], colour, 19);
+    paint([[-9, 15], [9, 15], [11, 23], [-11, 23]], C.steel, 20);
+    paint([[-18, 0], [-13, -9], [13, -9], [18, 0], [15, 11], [9, 18], [-9, 18], [-15, 11]], colour, 21);
+    ink(ctx, [[-16, 3], [-8, 6], [8, 6], [16, 3]], { seed: 22, width: 1.1, over: 0 });
+  }
+  paint(circlePts([0, -15], 15, 23), C.cream, 23);
+  paint(circlePts([1, -15], 10.5, 20, 8.5), captain ? C.tan : C.sky, 24);
+  ink(ctx, [[-5, -14], [-3, -18], [1, -20]], { color: C.cream, width: 1.7, seed: 15, over: 0 });
+  dot(ctx, [-1, -14], 1, C.ink, null);
+  dot(ctx, [6, -14], 1, C.ink, null);
+  ink(ctx, [[1, -10], [3, -8.5], [6, -10]], { width: 1, seed: 27, over: 0 });
+  if (captain) {
+    paint(Array.from({ length: 10 }, (_, i) => {
+      const a = i * Math.PI / 5 - Math.PI / 2, r = i % 2 ? 3 : 6;
+      return [Math.cos(a) * r, 12 + Math.sin(a) * r];
+    }), C.gold, 25);
+  } else {
+    ink(ctx, [[-4, 12], [4, 12]], { color: C.cream, width: 1.6, seed: 26, over: 0 });
+  }
+  ctx.restore();
+}
+
+const portraits = new Map();
+export function crewPortrait(status, captain) {
+  const key = `${status}:${captain}`;
+  if (!portraits.has(key)) {
+    const cv = document.createElement('canvas');
+    cv.width = 224; cv.height = 196;
+    const ctx = cv.getContext('2d');
+    ctx.scale(2, 2);
+    const ground = circlePts([56, 89], 34, 22, 6);
+    marker(ctx, ground, C.steel, { opacity: 0.35, seed: 70, streaks: false });
+    const colour = ({ online: C.sage, offline: C.sky, inactive: C.steel, unknown: C.shade })[status];
+    astronaut(ctx, 56, 47, 94, {
+      colour: captain && status !== 'inactive' ? C.rose : colour, captain, standing: true,
+    });
+    portraits.set(key, cv.toDataURL());
+  }
+  return portraits.get(key);
+}
+
+/** The cockpit and crew quarters share the same hull, with instruments or portholes in the bulkhead. */
+export function drawCrewCabin(cv, command) {
+  const { ctx, w, h } = fitCanvas(cv);
+  if (w < 24 || !h) return;
+  ctx.clearRect(0, 0, w, h);
+  const floor = h - 8;
+  const beam = [[1, floor - 3], [14, 22], [27, 9], [w - 27, 9], [w - 14, 22], [w - 1, floor - 3]];
+  ink(ctx, beam, { width: 1.25, color: C.pencil, seed: 90, over: 0 });
+  ink(ctx, [[1, floor], [w - 1, floor]], { width: 1.4, color: C.shadow, seed: 91, over: 0 });
+  const centres = w > 420 ? [w * 0.19, w * 0.5, w * 0.81] : [w * 0.27, w * 0.73];
+  centres.forEach((x, i) => {
+    const y = (floor + 9) / 2, r = Math.min(34, w / 9);
+    const window = circlePts([x, y], r, 30, 17);
+    marker(ctx, window, C.sky, { seed: i + 15, opacity: 0.6 });
+    ctx.save();
+    ctx.translate(x - r, y - 17);
+    ctx.beginPath(); ctx.ellipse(r, 17, r - 1, 16, 0, 0, Math.PI * 2); ctx.clip();
+    stars(ctx, r * 2, 34, 2 + i, 9, C.shadow);
+    if (i % 2 === 0) dot(ctx, [r * 1.22, 23], 8, C.tan, C.wood, 0.8);
+    ctx.restore();
+    ink(ctx, window, { closed: true, width: 1.3, seed: i + 18, over: 0 });
+  });
+  if (command && w > 240) {
+    const x = w / 2, y = floor;
+    const panel = [[x - 52, y + 3], [x - 40, y - 16], [x + 40, y - 16], [x + 52, y + 3]];
+    marker(ctx, panel, C.tan, { seed: 27 });
+    ink(ctx, panel, { width: 1.5, closed: true, over: 0, seed: 28 });
+    [C.sage, C.gold, C.rose].forEach((fill, i) => dot(ctx, [x + 12 * (i - 1), y - 7], 2.4, fill));
+  }
+}
+
+/** The busiest users' astronaut rockets orbit the server. Size is memory, thrust and speed are CPU. */
+export function orbitScene(cv, users, colours, time, { center = 'SERVER', current = '', captains = new Set() } = {}) {
   const { ctx, w, h } = fitCanvas(cv);
   ctx.clearRect(0, 0, w, h);
   stars(ctx, w, h, 404, 60);
   const c = [w * 0.5, h * 0.5];
-  const RX = w * 0.46, RY = h * 0.42;
-  const R0 = Math.min(RX, RY / 0.62);
+  const RX = w * 0.39, RY = h * 0.34;
   // the planet: the server itself
   const pr = Math.max(16, Math.min(RY * 0.28, 30));
   marker(ctx, circlePts(c, pr, 30), C.tan, { seed: 7, streaks: false });
@@ -133,41 +224,33 @@ export function orbitScene(cv, users, colours, time, { center = 'SERVER', memTot
   ink(ctx, circlePts(c, pr, 30), { closed: true, width: 1.6, seed: 8 });
   ink(ctx, circlePts(c, pr * 1.5, 34, pr * 0.42), { closed: true, width: 1, color: C.wood, seed: 9, amp: 0.4 });
   text(ctx, center, c[0], c[1] + pr + 16, { size: 12, bold: true, align: 'center', font: 'mono', raw: true });
-  const shown = users.slice(0, 10);
-  const hits = [];
-  const maxRss = Math.max(1, ...shown.map((u) => u.rss));
-  shown.forEach((u, i) => {
+  const maxRss = Math.max(1, ...users.map((u) => u.rss));
+  users.forEach((u, i) => {
     // rings spread over the whole canvas: wide ellipses, so labels have room
-    const f = (i + 0.6) / Math.max(1, shown.length);
+    const f = (i + 0.6) / users.length;
     const ring = pr * 2.2 + (RX - pr * 2.2) * f;
     const ry = pr * 1.5 + (RY - pr * 1.5) * f;
-    void R0;
     ink(ctx, circlePts(c, ring, 48, ry), { closed: true, width: 0.7, color: alpha(C.pencil, 0.7), seed: 30 + i, amp: 0.3, dash: [3, 5] });
     // angular speed: a gentle drift at idle, faster with CPU
     const speed = 0.08 + 0.9 * clamp(u.cpu / 50);
     const a = (time * speed + i * 2.399) % (Math.PI * 2);
     const p = [c[0] + Math.cos(a) * ring, c[1] + Math.sin(a) * ry];
-    const size = 9 + 17 * Math.sqrt(u.rss / maxRss);
+    const size = 27 + 34 * Math.sqrt(u.rss / maxRss);
     const col = colours[u.user] || C.sky;
-    // heading along the orbit
     const dir = Math.atan2(Math.cos(a) * ry, -Math.sin(a) * ring);
-    const P = (x, y) => [p[0] + (x * Math.cos(dir) - y * Math.sin(dir)) * size, p[1] + (x * Math.sin(dir) + y * Math.cos(dir)) * size];
     const load = clamp(u.cpu / 40);
-    if (load > 0.02) {
-      const len = 0.4 + 2.2 * load * (1 + 0.15 * Math.sin(time * 20 + i));
-      marker(ctx, [P(-0.8, -0.28), P(-0.8 - len, 0), P(-0.8, 0.28)], load > 0.7 ? C.rose : load > 0.35 ? C.gold : C.sky, { opacity: 0.95, seed: 50 + i, off: [0, 0], streaks: false });
+    if (u.user === current) {
+      ink(ctx, circlePts(p, size / 2 + 2), { closed: true, color: C.wood, width: 1.5, dash: [4, 3], seed: 19 });
     }
-    const hull = [P(1, 0), P(0.2, -0.45), P(-0.8, -0.5), P(-0.8, 0.5), P(0.2, 0.45)];
-    marker(ctx, hull, col, { seed: 60 + i });
-    ink(ctx, hull, { closed: true, width: 1.3, seed: 70 + i });
-    dot(ctx, P(0.35, 0), size * 0.16, C.cream, C.ink, 0.8);
-    text(ctx, u.user, p[0], p[1] - size - 6, { size: 13, bold: true, align: 'center', raw: true });
-    text(ctx, `${u.cores >= 0.995 ? u.cores.toFixed(1) + ' 核' : Math.round(u.cpu * 10) / 10 + '%'}`, p[0], p[1] + size + 14, { size: 11, align: 'center', font: 'mono', color: C.muted });
-    hits.push({ user: u.user, x: p[0], y: p[1], r: size + 8 });
+    astronaut(ctx, ...p, size, {
+      colour: col, captain: captains.has(u.user), angle: dir + Math.PI / 2,
+      plume: load > 0.02 ? 28 * load * (1 + 0.15 * Math.sin(time * 20 + i)) : 0,
+    });
+    const label = u.user.length > 14 ? u.user.slice(0, 13) + '…' : u.user;
+    const lx = clamp(p[0], 44, w - 44);
+    text(ctx, label, lx, p[1] - size / 2 - 5, { size: 13, bold: true, align: 'center', raw: true });
   });
-  if (!shown.length) text(ctx, '正在清点乘员…', c[0], c[1] + pr + 34, { size: 16, align: 'center', color: C.muted });
-  void memTotal; void darker; void lighter; void polyPath;
-  return hits;
+  if (!users.length) text(ctx, '正在清点乘员…', c[0], c[1] + pr + 34, { size: 16, align: 'center', color: C.muted });
 }
 
 /** Stacked CPU per user over time (cores), newest on the right. hist: [{ user: cores }], order: users bottom→top. */

@@ -246,15 +246,52 @@ impl Conn {
         }
     }
 
-    /// An interactive login shell on a pseudo-terminal, for the embedded terminal.
+    /// An interactive login shell or command on a pseudo-terminal, for the embedded terminal.
     /// The read half streams the shell's output; the write half takes keystrokes and window resizes.
-    pub async fn shell(&self, cols: u32, rows: u32) -> Result<(russh::ChannelReadHalf, russh::ChannelWriteHalf<client::Msg>)> {
-        let ch = self.handle.channel_open_session().await?;
+    pub async fn shell(&self, cols: u32, rows: u32, cmd: Option<&str>, auth: Option<(&str, &str, &str)>) -> Result<(russh::ChannelReadHalf, russh::ChannelWriteHalf<client::Msg>)> {
+        let mut ch = self.handle.channel_open_session().await?;
         // ask for colour and UTF-8 the way a desktop terminal would
         let _ = ch.set_env(false, "LANG", "C.UTF-8").await;
         let _ = ch.set_env(false, "COLORTERM", "truecolor").await;
         ch.request_pty(false, "xterm-256color", cols.max(20), rows.max(5), 0, 0, &[]).await?;
-        ch.request_shell(false).await?;
+        if let Some(cmd) = cmd { ch.exec(true, cmd).await?; }
+        else { ch.request_shell(false).await?; }
+        if let Some((prompt, ready, password)) = auth {
+            let authenticate = async {
+                let mut sent = false;
+                let mut tail = Vec::new();
+                while let Some(msg) = ch.wait().await {
+                    match msg {
+                        ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
+                            tail.extend_from_slice(&data);
+                            if tail.windows(ready.len()).any(|part| part == ready.as_bytes()) {
+                                return Ok::<(), anyhow::Error>(());
+                            }
+                            if tail.windows(prompt.len()).any(|part| part == prompt.as_bytes()) {
+                                if sent { break; }
+                                ch.data(format!("{password}\n").as_bytes()).await?;
+                                sent = true;
+                                tail.clear();
+                            }
+                            let extra = tail.len().saturating_sub(prompt.len().max(ready.len()));
+                            tail.drain(..extra);
+                        }
+                        ChannelMsg::ExitStatus { .. } | ChannelMsg::Close | ChannelMsg::Eof => break,
+                        _ => {}
+                    }
+                }
+                Err(anyhow!("Docker 终端的 sudo 验证失败"))
+            };
+            match tokio::time::timeout(Duration::from_secs(15), authenticate).await {
+                Ok(Ok(())) => {}
+                error => {
+                    let _ = ch.eof().await;
+                    let _ = ch.close().await;
+                    return Err(error.err().map(|_| anyhow!("Docker 终端的 sudo 验证超时"))
+                        .unwrap_or_else(|| anyhow!("Docker 终端的 sudo 验证失败")));
+                }
+            }
+        }
         Ok(ch.split())
     }
 

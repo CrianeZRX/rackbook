@@ -23,6 +23,11 @@ const spec = {
   'backup': { cores: 4, mem: 8, cpu: 3, disk: 0.7, gpus: 0, docker: false },
 };
 let prefs = { backgroundOnClose: true, floatEnabled: true, floatMode: 'list', floatMetrics: ['cpu', 'mem', 'net'], floatServers: [], floatAlertsOnly: false, floatOpacity: 0.96 };
+try {
+  prefs.fontScale = Number(localStorage.getItem('rackbook.fontScale')) || 100;
+  prefs.fleetName = localStorage.getItem('rackbook.fleetName') || '';
+  prefs.shipClassThresholds = JSON.parse(localStorage.getItem('rackbook.shipClassThresholds'));
+} catch {}
 const live = {};
 let t = 0;
 
@@ -107,7 +112,8 @@ function termRun(tid, line) {
     help: '预览里的小 shell：ls、whoami、uptime、nvidia-smi、colors、clear、exit。真实版本连到服务器上的 bash。',
     whoami: t.user,
     uptime: ' 09:20:11 up 23 days,  5:02,  2 users,  load average: 2.31, 2.04, 1.98',
-    ls: '\x1b[1;34mdata\x1b[0m  \x1b[1;34mlogs\x1b[0m  \x1b[1;34mprojects\x1b[0m  docker-compose.yml  notes.txt  \x1b[1;32mtrain.sh\x1b[0m',
+    pwd: t.image ? '/' : '/home/' + t.user,
+    ls: t.image ? 'bin  dev  etc  home  proc  root  tmp  usr  var' : '\x1b[1;34mdata\x1b[0m  \x1b[1;34mlogs\x1b[0m  \x1b[1;34mprojects\x1b[0m  docker-compose.yml  notes.txt  \x1b[1;32mtrain.sh\x1b[0m',
     'nvidia-smi': '+---------------------------------------------------------------+\r\n| GPU  Name              Temp  Pwr:Usage/Cap |   Memory-Usage     |\r\n|  0   A100-PCIE-40GB     60C   185W / 250W  | 24200MiB / 40960MiB|\r\n|  1   A100-PCIE-40GB     62C   189W / 250W  | 25300MiB / 40960MiB|\r\n+---------------------------------------------------------------+',
     colors: [30, 31, 32, 33, 34, 35, 36, 37].map((n) => `\x1b[${n}m■ ${n}\x1b[0m \x1b[${n + 60}m■ ${n + 60}\x1b[0m`).join('  '),
   }[c];
@@ -117,9 +123,14 @@ function termRun(tid, line) {
 }
 export async function invoke(cmd, a) {
   if (cmd === 'term_open') {
+    if (a.image && navigatorOn(a.id)) throw new Error('没有权限：这个账户不能使用 Docker。');
     const tid = 'mock-' + Math.random().toString(36).slice(2);
     const s = servers.find((x) => x.id === a.id), ac = s?.accounts.find((x) => x.id === s.activeAccount);
-    terms[tid] = { user: ac?.user || 'root', host: s?.name || 'host', line: '' };
+    terms[tid] = { user: a.image ? 'root' : ac?.user || 'root', host: a.image ? 'image-preview' : s?.name || 'host', line: '', image: a.image };
+    if (a.image) {
+      tout(tid, `\x1b[90mDocker 镜像终端（浏览器预览）\x1b[0m\r\n` + prompt(tid));
+      return tid;
+    }
     tout(tid, `\x1b[90mWelcome to Ubuntu 24.04.1 LTS (GNU/Linux 6.8.0-49-generic x86_64)\x1b[0m\r\n\r\n这是浏览器预览里的模拟终端，输入 help 看看能做什么。\r\n\r\n` + prompt(tid));
     return tid;
   }
@@ -143,7 +154,14 @@ export async function invoke(cmd, a) {
       { name: 'nas', host: '192.168.1.20', port: 22, user: 'admin', keyPath: '', source: 'PuTTY', note: '' },
     ];
     case 'get_state': return { servers, live, prefs, backgrounded: false };
-    case 'set_prefs': prefs = a.prefs; emit('prefs', prefs); return;
+    case 'set_prefs':
+      prefs = a.prefs;
+      try {
+        if (prefs.fontScale) localStorage.setItem('rackbook.fontScale', prefs.fontScale);
+        localStorage.setItem('rackbook.fleetName', prefs.fleetName || '');
+        localStorage.setItem('rackbook.shipClassThresholds', JSON.stringify(prefs.shipClassThresholds ?? null));
+      } catch {}
+      emit('prefs', prefs); return;
     case 'save_server': {
       const i = servers.findIndex((s) => s.id === a.cfg.id);
       if (i >= 0) servers[i] = a.cfg; else { servers.push(a.cfg); spec[a.cfg.name] = { cores: 4, mem: 8, cpu: 20, disk: 0.4, gpus: 0, docker: false }; }
@@ -164,7 +182,7 @@ export async function invoke(cmd, a) {
     case 'download': case 'upload': return '预览模式：没有真的传输';
     // a navigator outside the docker group: refused, like the real backend
     case 'docker': return navigatorOn(a.id) ? { code: 1, out: '', err: `领航员 ${activeUser(a.id)} 没有 sudo 权限，这个操作需要舰长` } : mockDocker(a.args);
-    case 'sudo': case 'run': return mockRun(a.cmd);
+    case 'sudo': case 'run': return mockRun(a.cmd, a.id);
   }
   return null;
 }
@@ -191,7 +209,26 @@ function mockDocker(args) {
   return { code: 0, err: '', out: '' };
 }
 
-function mockRun(cmd) {
+function mockCrew(id) {
+  const now = Math.floor(Date.now() / 1000);
+  const login = activeUser(id) || 'root';
+  const crew = new Set([login, 'root', 'ubuntu', 'deploy', 'nova', 'orion', 'dba', 'ml', 'release', 'ci', 'backup', 'observer']);
+  const records = [
+    ['root', 1], ['ubuntu', 2], ['deploy', 4], ['nova', 0], ['orion', 41], ['dba', 6],
+    ['ml', 14], ['release', 65], ['ci', 2], ['backup', 78],
+  ];
+  return {
+    code: 0, err: '',
+    out: ['@@ME', login, '@@U', ...Array.from(crew, (user, i) =>
+      `${user}:${user === 'root' ? 0 : 1000 + i}:${user === 'root' ? '/root' : '/home/' + user}:${user === 'backup' ? '/usr/sbin/nologin' : '/bin/bash'}:${user === 'root' ? 0 : 1000 + i}`),
+    '@@G', 'sudo:x:27:ubuntu,dba', 'docker:x:999:ubuntu,deploy',
+    '@@CLOCK', now, '@@PROCS', ...Array.from(crew, (user, i) =>
+      ['root', 'nova', 'ci', 'dba', login].includes(user) ? `${user === 'root' ? 0 : 1000 + i} ${i + 2}` : '').filter(Boolean),
+    '@@LAST', 'observer\t-', ...records.map(([user, days]) => `${user}\t${new Date((now - days * 86400) * 1000).toISOString()}`)].join('\n'),
+  };
+}
+
+function mockRun(cmd, id) {
   if (cmd.includes('query-compute-apps')) {
     const uu = (i) => `GPU-0000${i}-aaaa`;
     return { code: 0, err: '', out: [0, 1, 2, 3, 4, 5, 6, 7].map((i) => `${i}, ${uu(i)}`).join('\n') + '\n@@\n' +
@@ -216,7 +253,7 @@ function mockRun(cmd) {
     return { code: 0, err: '', out: `${p.replace('~', '/root')}\n${Math.floor(Date.now() / 1000)} ${body.length} root 644\nW\n@@BODY\n${body}` };
   }
   if (cmd.startsWith('systemctl list-units')) return { code: 0, err: '', out: 'cron.service loaded active running Regular background program processing daemon\ndocker.service loaded active running Docker Application Container Engine\nnginx.service loaded active running A high performance web server\nssh.service loaded active running OpenBSD Secure Shell server\n' };
-  if (cmd.includes('getent passwd')) return { code: 0, err: '', out: 'root\n@@U\nroot:0:/root:/bin/bash\nubuntu:1000:/home/ubuntu:/bin/bash\ndeploy:1001:/home/deploy:/bin/bash\nbackup:1002:/var/backups:/usr/sbin/nologin\n@@G\nsudo:x:27:ubuntu\ndocker:x:999:ubuntu,deploy\n' };
+  if (cmd.includes('getent passwd')) return mockCrew(id);
   if (cmd.startsWith('stat -c')) return { code: 0, err: '', out: `${Math.floor(Date.now() / 1000)}\n` };
   return { code: 0, err: '', out: `$ ${cmd}\n（预览模式：命令没有真的执行）\n` };
 }

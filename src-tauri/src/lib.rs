@@ -189,8 +189,8 @@ async fn run(store: S<'_>, id: String, cmd: String, stdin: Option<String>, timeo
 }
 
 #[tauri::command]
-async fn term_open(store: S<'_>, id: String, cols: u32, rows: u32) -> Result<String, String> {
-    store.inner().term_open(uid(&id)?, cols, rows).await
+async fn term_open(store: S<'_>, id: String, cols: u32, rows: u32, image: Option<String>) -> Result<String, String> {
+    store.inner().term_open(uid(&id)?, cols, rows, image.as_deref()).await
 }
 
 #[tauri::command]

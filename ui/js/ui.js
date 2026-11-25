@@ -61,8 +61,8 @@ export function modal(inner, { width = 560, onMount } = {}) {
 export function confirm(titleText, message, okLabel = '确定', danger = true) {
   return modal(`
     <div class="kicker">请确认</div>
-    <div class="h" style="font-size:22px">${esc(titleText)}</div>
-    <div style="font-size:16px">${esc(message)}</div>
+    <div class="h" style="font-size:1.375rem">${esc(titleText)}</div>
+    <div style="font-size:1rem">${esc(message)}</div>
     <div class="row" style="justify-content:flex-end;margin-top:6px">
       ${btn('取消', { act: 'no' })}${btn(okLabel, { act: 'yes', cls: danger ? 'danger' : 'solid' })}
     </div>`, { width: 480, onMount: (m, close) => delegate(m, { yes: () => close(true), no: () => close(false) }) });
@@ -70,7 +70,7 @@ export function confirm(titleText, message, okLabel = '确定', danger = true) {
 
 export function prompt(titleText, message, value = '', okLabel = '确定') {
   return modal(`
-    <div class="h" style="font-size:22px">${esc(titleText)}</div>
+    <div class="h" style="font-size:1.375rem">${esc(titleText)}</div>
     <div class="muted">${esc(message)}</div>
     <input class="field sk" id="pv" value="${esc(value)}">
     <div class="row" style="justify-content:flex-end">${btn('取消', { act: 'no' })}${btn(okLabel, { act: 'yes', cls: 'solid' })}</div>`,
@@ -83,7 +83,7 @@ export function prompt(titleText, message, value = '', okLabel = '确定') {
 
 export function textSheet(kicker, titleText, body) {
   return modal(`${titleBlock(kicker, titleText)}
-    <div class="card sk" style="max-height:60vh;overflow:auto"><pre data-notr class="mono sel" style="margin:0;font-size:12px;white-space:pre-wrap">${esc(body)}</pre></div>
+    <div class="card sk" style="max-height:60vh;overflow:auto"><pre data-notr class="mono sel" style="margin:0;font-size:0.75rem;white-space:pre-wrap">${esc(body)}</pre></div>
     <div class="row" style="justify-content:flex-end">${btn('合上', { act: 'no', cls: 'solid' })}</div>`,
   { width: 900, onMount: (m, close) => delegate(m, { no: () => close() }) });
 }

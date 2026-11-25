@@ -15,16 +15,18 @@ function shell() {
   document.getElementById('app').innerHTML = `
     <aside id="sidebar">
       <div class="brand">
-        <div class="kicker" style="font-size:12px">RACKBOOK · 机房手账</div>
-        <div class="title">星际舰队</div>
-        <div class="subtitle" style="font-size:14px">every server is a ship; you are its crew</div>
+        <div class="kicker" style="font-size:0.75rem">RACKBOOK · 机房手账</div>
+        <div class="title" id="fleet-brand"></div>
+        <div class="subtitle" style="font-size:0.875rem">every server is a ship; you are its crew</div>
       </div>
       <div class="navrow sk" data-act="fleet" id="navFleet"></div>
       <div class="shiplist" id="ships"></div>
       <div class="sidefoot">
-        <div class="row">${btn('＋ 新舰船', { act: 'new', cls: 'solid' })}${btn('从配置导入…', { act: 'import', cls: 'chip', title: '自动查找 ~/.ssh/config 和 PuTTY 里已经配置好的服务器' })}</div>
-        <div class="row">${btn('设置', { act: 'settings', cls: 'chip' })}<span class="spacer"></span>${btn('转入后台', { act: 'bg', cls: 'chip', title: '关闭主窗口但继续监控；任务栏右下角出现舰船图标，可选弹出悬浮窗' })}</div>
-        <label class="row" style="gap:6px" title="Language"><span style="font-size:15px">🌐</span><select id="langSel" class="field sk" data-notr style="flex:1;min-width:0;padding:2px 6px;font-size:14px">${LANGS.map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select></label>
+        <div class="side-actions">
+          ${btn('＋ 新舰船', { act: 'new', cls: 'solid chip' })}${btn('从配置导入…', { act: 'import', cls: 'chip', title: '自动查找 ~/.ssh/config 和 PuTTY 里已经配置好的服务器' })}
+          ${btn('设置', { act: 'settings', cls: 'chip' })}${btn('转入后台', { act: 'bg', cls: 'chip', title: '关闭主窗口但继续监控；任务栏右下角出现舰船图标，可选弹出悬浮窗' })}
+        </div>
+        <label class="row side-language" style="gap:6px" title="Language"><span style="font-size:0.9375rem">🌐</span><select id="langSel" class="field sk" data-notr style="flex:1;min-width:0;padding:2px 6px;font-size:0.875rem">${LANGS.map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select></label>
       </div>
     </aside>
     <div id="rule" class="rule-v" data-width="1.4" data-seed="8"></div>
@@ -62,19 +64,23 @@ export function goBackground() {
 }
 
 function renderSidebar() {
+  const brand = document.getElementById('fleet-brand');
+  const name = S.prefs.fleetName?.trim();
+  brand.toggleAttribute('data-notr', !!name);
+  brand.textContent = name || '星际舰队';
   const nf = document.getElementById('navFleet');
   nf.classList.toggle('on', S.pane === 'fleet');
   nf.classList.toggle('lit', S.pane === 'fleet');
-  nf.innerHTML = `<span class="red" style="font-size:18px;font-weight:700">✦</span><div><div class="h" style="font-size:18px">星图 · 舰队总览</div><div class="mono muted" style="font-size:11px">${S.servers.length} 艘 · ${onlineCount()} 在航</div></div>`;
+  nf.innerHTML = `<span class="red" style="font-size:1.125rem;font-weight:700">✦</span><div><div class="h" style="font-size:1.125rem">星图 · 舰队总览</div><div class="mono muted" style="font-size:0.6875rem">${S.servers.length} 艘 · ${onlineCount()} 在航</div></div>`;
   document.getElementById('ships').innerHTML = S.servers.map((s, i) => {
     const l = liveOf(s.id), hl = health(l), sel = S.pane === s.id, a = active(s), sn = l.snap;
     const body = sn && l.phase === 'online'
       ? meter('CPU', sn.cpu / 100, F.pct(sn.cpu)) + meter('MEM', memFrac(sn), F.pct(memFrac(sn) * 100)) +
-        `<div class="row mono muted" style="font-size:10px"><span>↓ ${F.rate(sn.rxRate)}</span><span class="spacer"></span><span>↑ ${F.rate(sn.txRate)}</span></div>`
-      : `<div style="font-size:13px" class="${l.phase === 'offline' ? 'red' : 'muted'}">${esc(phaseText(l))}</div>`;
+        `<div class="row mono muted" style="font-size:0.625rem"><span>↓ ${F.rate(sn.rxRate)}</span><span class="spacer"></span><span>↑ ${F.rate(sn.txRate)}</span></div>`
+      : `<div style="font-size:0.8125rem" class="${l.phase === 'offline' ? 'red' : 'muted'}">${esc(phaseText(l))}</div>`;
     return `<div class="shiprow sk${sel ? ' lit' : ''}" data-act="ship" data-id="${s.id}" style="background-color:${sel ? 'rgba(244,184,41,.3)' : 'transparent'};box-shadow:inset 0 0 0 999px ${wash(s.wash)}${sel ? '40' : '22'}">
-      <div class="row">${dot(hl, 13)}<span class="name grow" data-notr>${esc(title(s))}</span><span class="mono red" style="font-size:10px">No.${i + 1}</span></div>
-      <div class="row">${badge(a?.privilege || 'unknown', true)}<span class="mono muted" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(display(s))}</span></div>
+      <div class="row">${dot(hl, 13)}<span class="name grow" data-notr>${esc(title(s))}</span><span class="mono red" style="font-size:0.625rem">No.${i + 1}</span></div>
+      <div class="row">${badge(a?.privilege || 'unknown', true)}<span class="mono muted" style="font-size:0.6875rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(display(s))}</span></div>
       ${body}</div>`;
   }).join('');
 }
@@ -158,7 +164,7 @@ export async function editServer(id) {
     return `<div class="card sk${on ? ' lit' : ''}" style="padding:12px;gap:8px;background-color:${on ? 'rgba(244,184,41,.15)' : 'rgba(255,253,246,.7)'}" data-acc="${a.id}">
       <div class="row">${btn(on ? '● 当前登舰' : '○ 设为当前', { act: 'useAcct', cls: 'chip' + (on ? ' active' : ''), data: `data-a="${a.id}"` })}${badge(a.privilege, true)}<span class="spacer"></span>${d.accounts.length > 1 ? btn('移除', { act: 'rmAcct', cls: 'chip danger', data: `data-a="${a.id}"` }) : ''}</div>
       <div class="row"><input class="field sk" style="width:170px" data-f="label" placeholder="称呼，例如 运维舰长" value="${esc(a.label)}"><input class="field sk mono" data-f="user" placeholder="用户名" value="${esc(a.user)}"></div>
-      <div class="row"><b style="font-size:14px">登录方式</b>${btn('密钥', { act: 'auth', cls: 'chip' + (a.auth !== 'password' ? ' active' : ''), data: `data-a="${a.id}" data-v="key"` })}${btn('密码', { act: 'auth', cls: 'chip' + (a.auth === 'password' ? ' active' : ''), data: `data-a="${a.id}" data-v="password"` })}</div>
+      <div class="row"><b style="font-size:0.875rem">登录方式</b>${btn('密钥', { act: 'auth', cls: 'chip' + (a.auth !== 'password' ? ' active' : ''), data: `data-a="${a.id}" data-v="key"` })}${btn('密码', { act: 'auth', cls: 'chip' + (a.auth === 'password' ? ' active' : ''), data: `data-a="${a.id}" data-v="password"` })}</div>
       ${a.auth === 'password'
         ? pw('login', a.hasLoginPassword, '登录密码（只存在 Windows 凭据管理器里）')
         : `<div class="row"><input class="field sk mono" data-f="keyPath" placeholder="私钥文件（留空 = 自动找 ~/.ssh/id_ed25519、id_rsa）" value="${esc(a.keyPath)}">${btn('选择…', { act: 'pickKey', cls: 'chip', data: `data-a="${a.id}"` })}</div>${pw('keypass', a.hasKeyPass, '私钥口令（没有就留空）')}`}
@@ -246,9 +252,9 @@ export async function importServers({ auto = false } = {}) {
     return `<div class="row top" style="gap:10px;padding:6px 4px;border-bottom:1px dashed #cfc7b3;${dup ? 'opacity:.5' : ''}">
       ${dup ? '<span style="width:17px"></span>' : check('', on, 'pick', `data-n="${esc(f.name)}"`)}
       <div class="col grow" style="gap:1px;min-width:0">
-        <div class="row base"><b data-notr style="font-size:17px">${esc(f.name)}</b><span class="mono muted" data-notr style="font-size:12px">${esc(f.user ? f.user + '@' : '')}${esc(f.host)}${f.port !== 22 ? ':' + f.port : ''}</span><span class="spacer"></span>${dup ? '<span class="muted" style="font-size:13px">已在舰队中</span>' : ''}</div>
-        <div class="mono muted" data-notr style="font-size:11px">${esc(f.keyPath || '')}${f.keyPath ? ' · ' : ''}${esc(f.source)}</div>
-        ${f.note ? `<div class="red" style="font-size:13px">${esc(f.note)}</div>` : ''}
+        <div class="row base"><b data-notr style="font-size:1.0625rem">${esc(f.name)}</b><span class="mono muted" data-notr style="font-size:0.75rem">${esc(f.user ? f.user + '@' : '')}${esc(f.host)}${f.port !== 22 ? ':' + f.port : ''}</span><span class="spacer"></span>${dup ? '<span class="muted" style="font-size:0.8125rem">已在舰队中</span>' : ''}</div>
+        <div class="mono muted" data-notr style="font-size:0.6875rem">${esc(f.keyPath || '')}${f.keyPath ? ' · ' : ''}${esc(f.source)}</div>
+        ${f.note ? `<div class="red" style="font-size:0.8125rem">${esc(f.note)}</div>` : ''}
       </div></div>`;
   };
   const render = (m) => {

@@ -4,7 +4,7 @@
 import { invoke, listen, isTauri } from '../api.js';
 import { say, server, active } from '../state.js';
 import { btn, delegate } from '../ui.js';
-import { sketchAll } from '../kit.js';
+import { sketchAll, scaledFontSize } from '../kit.js';
 import { esc } from '../fmt.js';
 
 export const THEME = {
@@ -17,38 +17,70 @@ export const THEME = {
 
 const b64 = (s) => { const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; };
 
-export function mount(el, { id }) {
+export function mount(el, { id, image, onBack }) {
   const acct = active(server(id));
+  const title = image ? '镜像终端' : '终端 · 交互式';
+  const target = image?.repo || (acct?.user || '') + '@' + (server(id)?.host || '');
+  const note = image
+    ? '通过 /bin/sh 访问镜像。终端关闭时，临时容器会清理。'
+    : '真正的交互式 shell，跑在这艘船现有的 SSH 连接上：vim、htop、tmux 都能用。Ctrl+Shift+C / V 复制粘贴；窗口大小会自动同步给服务器。';
   el.innerHTML = `<div class="page" style="padding-top:18px;flex:1;min-height:0">
     <div class="card sk" style="flex:1;min-height:0">
-      <div class="head"><span class="kicker">Terminal</span><span class="h">终端 · 交互式</span>
-        <span class="mono muted small" data-notr>${esc((acct?.user || '') + '@' + (server(id)?.host || ''))}</span><span id="tstate" class="small"></span><span class="spacer"></span>
+      <div class="head"><span class="kicker">Terminal</span><span class="h">${title}</span>
+        <span class="mono muted small terminal-target" data-notr>${esc(target)}</span><span id="tstate" class="small"></span><span class="spacer"></span>
         <span id="tbtns" class="row"></span></div>
       <div class="termbox"><div id="term"></div></div>
-      <div class="foot">真正的交互式 shell，跑在这艘船现有的 SSH 连接上：vim、htop、tmux 都能用。Ctrl+Shift+C / V 复制粘贴；窗口大小会自动同步给服务器。</div>
+      <div class="foot">${note}</div>
     </div></div>`;
 
   let term = null, fit = null, tid = null, unlisten = null, alive = true, ro = null, state = 'connecting';
+  let starting = false;
+  const pending = [];
   const setState = (s) => {
     state = s;
     const t = el.querySelector('#tstate');
     t.textContent = s === 'open' ? '● 已接通' : s === 'connecting' ? '… 正在接通' : '○ 已断开';
     t.className = 'small ' + (s === 'open' ? 'okc' : s === 'closed' ? 'red' : 'muted');
     el.querySelector('#tbtns').innerHTML = btn('清屏', { act: 'clear', cls: 'chip' }) + btn(s === 'open' ? '重新开一个' : '重新连接', { act: 'reopen', cls: 'chip' }) +
-      (isTauri ? btn('在系统终端打开', { act: 'external', cls: 'chip', title: '用 Windows Terminal / macOS 终端 / gnome-terminal 打开 ssh' }) : '');
+      (onBack ? btn('返回镜像', { act: 'back', cls: 'chip' }) :
+        isTauri ? btn('在系统终端打开', { act: 'external', cls: 'chip', title: '用 Windows Terminal / macOS 终端 / gnome-terminal 打开 ssh' }) : '');
     sketchAll(el);
   };
 
   const open = async () => {
-    if (tid) { invoke('term_close', { tid }); tid = null; }
+    if (starting || !term) return;
+    starting = true;
     setState('connecting');
     try {
-      tid = await invoke('term_open', { id, cols: term.cols, rows: term.rows });
+      if (tid) {
+        const previous = tid; tid = null;
+        await invoke('term_close', { tid: previous });
+      }
+      if (!alive) return;
+      const opened = await invoke('term_open', { id, cols: term.cols, rows: term.rows, ...(image && { image: image.id }) });
+      if (!alive) { invoke('term_close', { tid: opened }); return; }
+      tid = opened;
       setState('open');
+      for (const event of pending.splice(0)) { if (event.tid === opened) onTerm(event); }
       term.focus();
     } catch (e) {
+      if (!alive) return;
       setState('closed');
       term.write(`\r\n\x1b[31m没接通：${e}\x1b[0m\r\n按 Enter 重试。\r\n`);
+    } finally {
+      pending.length = 0;
+      starting = false;
+    }
+  };
+
+  const onTerm = (event) => {
+    if (!alive) return;
+    if (event.tid !== tid) { if (!tid && starting) pending.push(event); return; }
+    if (event.data) term.write(b64(event.data));
+    if (event.closed) {
+      tid = null;
+      setState('closed');
+      term.write('\r\n\x1b[90m── 会话结束 · 按 Enter 重新连接 ──\x1b[0m\r\n');
     }
   };
 
@@ -58,7 +90,7 @@ export function mount(el, { id }) {
     if (!alive) return;
     term = new window.Terminal({
       theme: THEME, allowTransparency: true, cursorBlink: true, cursorStyle: 'bar', cursorWidth: 2,
-      fontFamily: '"Courier Prime", "LXGW WenKai TC", "ZCOOL KuaiLe", monospace', fontSize: 15, lineHeight: 1.18,
+      fontFamily: '"Courier Prime", "LXGW WenKai TC", "ZCOOL KuaiLe", monospace', fontSize: scaledFontSize(15), lineHeight: 1.18,
       scrollback: 5000, convertEol: false, macOptionIsMeta: true, rightClickSelectsWord: true,
     });
     fit = new window.FitAddon.FitAddon();
@@ -77,17 +109,15 @@ export function mount(el, { id }) {
       else if (d === '\r') open();
     });
     term.onResize(({ cols, rows }) => { if (tid) invoke('term_resize', { tid, cols, rows }); });
-    unlisten = await listen('term', (p) => {
-      if (!alive || p.tid !== tid) return;
-      if (p.data) term.write(b64(p.data));
-      if (p.closed) { tid = null; setState('closed'); term.write('\r\n\x1b[90m── 会话结束 · 按 Enter 重新连接 ──\x1b[0m\r\n'); }
-    });
+    unlisten = await listen('term', onTerm);
+    if (!alive) { unlisten(); return; }
     ro = new ResizeObserver(() => { try { fit.fit(); } catch {} });
     ro.observe(el.querySelector('.termbox'));
     open();
   };
 
   delegate(el, {
+    back: onBack,
     clear: () => term?.clear(),
     reopen: () => { term?.reset(); open(); },
     external: () => invoke('open_terminal', { id }).catch((e) => say('打不开系统终端：' + e, 'refuse')),
@@ -96,7 +126,10 @@ export function mount(el, { id }) {
   start();
 
   return {
-    update() {},
+    update() {
+      const size = scaledFontSize(15);
+      if (term && term.options.fontSize !== size) { term.options.fontSize = size; fit.fit(); }
+    },
     destroy() {
       alive = false;
       ro?.disconnect();

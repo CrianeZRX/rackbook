@@ -264,7 +264,7 @@ export function mountEditor(el, { id, path, name, onClose }) {
     const lines = st.text.split('\n');
     let pos = 0; for (let i = 0; i < Math.min(line - 1, lines.length); i++) pos += lines[i].length + 1;
     ta.focus(); ta.setSelectionRange(pos, pos + (lines[line - 1] || '').length);
-    ta.scrollTop = Math.max(0, (line - 6) * 19);
+    ta.scrollTop = Math.max(0, (line - 6) * parseFloat(getComputedStyle(ta).lineHeight));
     syncScroll();
   };
 
@@ -285,8 +285,8 @@ export function mountEditor(el, { id, path, name, onClose }) {
     el.querySelector('#eh').innerHTML = `${btn('← 返回目录', { act: 'back' })}
       <div class="col grow" style="gap:1px;min-width:0">
         <div class="row"><span class="kicker">Editor · ${KINDS.find((k) => k[0] === st.kind)[1]}</span>${sudoMode ? `<b class="woodc small">· ${canSudo(p) ? '以舰长身份（sudo）' : '只读：没有写权限'}</b>` : ''}</div>
-        <div class="row"><span class="title" style="font-size:24px">${esc(name)}</span>${dirty() ? '<b class="red">● 未保存</b>' : ''}</div>
-        <div class="mono muted sel" style="font-size:11px">${esc(st.abs || path)}</div></div>
+        <div class="row"><span class="title" style="font-size:1.5rem">${esc(name)}</span>${dirty() ? '<b class="red">● 未保存</b>' : ''}</div>
+        <div class="mono muted sel" style="font-size:0.6875rem">${esc(st.abs || path)}</div></div>
       <div class="col" style="align-items:flex-end;gap:6px">
         <div class="row"><b class="small">语法</b>${KINDS.map(([k, l]) => btn(l, { act: 'kind', cls: 'chip' + (st.kind === k ? ' active' : ''), data: `data-k="${k}"` })).join('')}</div>
         <div class="row">${[['source', '源码'], ['split', '源码 + 结构'], ['visual', '结构']].map(([m, l]) => btn(l, { act: 'mode', cls: 'chip' + (st.mode === m ? ' active' : ''), data: `data-m="${m}"` })).join('')}
@@ -298,9 +298,9 @@ export function mountEditor(el, { id, path, name, onClose }) {
   };
   const renderFoot = () => {
     const c = st.check;
-    el.querySelector('#ef').innerHTML = (c ? `<b class="${c.ok ? 'okc' : 'red'}" style="font-size:15px">${c.ok ? '✓' : '✗'} ${esc(c.msg)}</b>${c.line ? btn(`跳到第 ${c.line} 行`, { act: 'goto', cls: 'chip', data: `data-l="${c.line}"` }) : ''}` : '') +
+    el.querySelector('#ef').innerHTML = (c ? `<b class="${c.ok ? 'okc' : 'red'}" style="font-size:0.9375rem">${c.ok ? '✓' : '✗'} ${esc(c.msg)}</b>${c.line ? btn(`跳到第 ${c.line} 行`, { act: 'goto', cls: 'chip', data: `data-l="${c.line}"` }) : ''}` : '') +
       (st.note ? `<span class="woodc small">${esc(st.note)}</span>` : '') + '<span class="spacer"></span>' +
-      `<span class="mono muted" style="font-size:10px">${[st.size ? F.bytes(st.size) : '', st.owner, st.perms].filter(Boolean).join(' · ')}</span>` + check('保存前备份为 .rackbook.bak', st.backup, 'backup');
+      `<span class="mono muted" style="font-size:0.625rem">${[st.size ? F.bytes(st.size) : '', st.owner, st.perms].filter(Boolean).join(' · ')}</span>` + check('保存前备份为 .rackbook.bak', st.backup, 'backup');
     sketchAll(el);
   };
   const renderStruct = () => {
@@ -308,7 +308,7 @@ export function mountEditor(el, { id, path, name, onClose }) {
     const ob = el.querySelector('#obody');
     if (st.kind === 'text') {
       const ls = st.text.split('\n');
-      const row = (k, v) => `<div class="row"><b style="color:#5d6c9c;font-size:15px">${k}</b><span class="spacer"></span><span class="mono small">${esc(v)}</span></div>`;
+      const row = (k, v) => `<div class="row"><b style="color:#5d6c9c;font-size:0.9375rem">${k}</b><span class="spacer"></span><span class="mono small">${esc(v)}</span></div>`;
       ob.innerHTML = row('行数', ls.length) + row('词数', st.text.split(/\s+/).filter(Boolean).length) + row('字符', st.text.length) + row('最长一行', Math.max(...ls.map((l) => l.length)) + ' 字符') +
         row('换行符', st.text.includes('\r\n') ? 'Windows (CRLF)' : 'Unix (LF)') + row('行尾多余空白', ls.filter((l) => /[ \t]$/.test(l)).length + ' 行') + row('结尾换行', st.text.endsWith('\n') ? '有' : '没有');
       return;

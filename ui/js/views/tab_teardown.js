@@ -57,13 +57,13 @@ export function mount(el, { id }) {
   const focusPanel = (s) => {
     const k = hero.focus, sub = SUBS.find((x) => x[0] === k);
     if (!s) return card(`<div class="muted">还没有数据。等这艘船接通后，这里会列出${sub[1]}的细节。</div>`, { kicker: sub[2], title: sub[1], lit: true });
-    const big = (b, n) => `<div><div class="big" style="font-size:32px">${esc(b)}</div><div class="muted">${esc(n)}</div></div>`;
+    const big = (b, n) => `<div><div class="big" style="font-size:2rem">${esc(b)}</div><div class="muted">${esc(n)}</div></div>`;
     let body = '';
     if (k === 'cpu') {
       body = big(F.pct(s.cpu), `${s.cores} 核 · 运行队列 ${s.procsRunning} · iowait ${F.pct(s.iowait)}`) +
-        `<div class="kicker" style="font-size:12px">每个核一格</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(30px,1fr));gap:6px">` +
-        s.perCore.map((v, i) => `<div title="核 ${i}：${F.pct(v)}" style="text-align:center"><div style="height:26px;border:1px solid #231e16;position:relative;background:#fffdf6"><i style="position:absolute;left:0;right:0;bottom:0;height:${Math.min(100, v).toFixed(0)}%;background:${loadColor(v)}"></i></div><div class="mono muted" style="font-size:9px">c${i}</div></div>`).join('') +
-        `</div><div class="mono" style="font-size:11px">负载 1 / 5 / 15 分钟：${loadText(s)}</div>`;
+        `<div class="kicker" style="font-size:0.75rem">每个核一格</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(30px,1fr));gap:6px">` +
+        s.perCore.map((v, i) => `<div title="核 ${i}：${F.pct(v)}" style="text-align:center"><div style="height:26px;border:1px solid #231e16;position:relative;background:#fffdf6"><i style="position:absolute;left:0;right:0;bottom:0;height:${Math.min(100, v).toFixed(0)}%;background:${loadColor(v)}"></i></div><div class="mono muted" style="font-size:0.5625rem">c${i}</div></div>`).join('') +
+        `</div><div class="mono" style="font-size:0.6875rem">负载 1 / 5 / 15 分钟：${loadText(s)}</div>`;
     } else if (k === 'mem') {
       const free = Math.max(0, s.memTotal - s.memUsed - s.memCache);
       const seg = (v, c) => `<i style="display:block;flex:${v};background:${c}"></i>`;
@@ -71,21 +71,21 @@ export function mount(el, { id }) {
         `<div style="display:flex;height:16px;border:1.1px solid #231e16">${seg(s.memUsed, C.blue)}${seg(s.memCache, C.sky)}${seg(free, C.cream)}</div>
          <div class="row small"><span style="color:${C.blue}">■</span>已用 <span style="color:${C.sky}">■</span>缓存 <span>□</span>空闲</div>` +
         (s.swapTotal > 0 ? meter('SWAP', s.swapUsed / s.swapTotal, F.bytes(s.swapUsed)) : '') +
-        `<div class="kicker" style="font-size:12px">最占内存的进程</div>` +
+        `<div class="kicker" style="font-size:0.75rem">最占内存的进程</div>` +
         s.procs.slice().sort((a, b) => b.rss - a.rss).slice(0, 6).map((p) => `<div class="row"><span class="grow">${esc(p.command)}</span><span class="mono small">${F.bytes(p.rss)}</span></div>`).join('');
     } else if (k === 'gpu') {
       body = !s.gpus.length
         ? big('—', '没检测到显卡') + '<div class="muted">通过 nvidia-smi（NVIDIA）或 /sys/class/drm 的 amdgpu 节点读取显卡。都没有时，拆解图上画的是一个空的 PCIe 槽。</div>'
         : big(F.pct(gpuUtil(s)), `${s.gpus.length} 块显卡的平均占用`) + s.gpus.map((g) => `<div class="col" style="gap:3px">
-            <div class="row"><b class="mono grow" style="font-size:12px">#${g.index} ${esc(g.name)}</b>${g.temp != null ? `<span class="mono ${g.temp > 80 ? 'red' : ''}" style="font-size:11px">${Math.round(g.temp)}°C</span>` : ''}</div>
+            <div class="row"><b class="mono grow" style="font-size:0.75rem">#${g.index} ${esc(g.name)}</b>${g.temp != null ? `<span class="mono ${g.temp > 80 ? 'red' : ''}" style="font-size:0.6875rem">${Math.round(g.temp)}°C</span>` : ''}</div>
             ${meter('UTIL', g.util / 100, F.pct(g.util))}${meter('VRAM', g.memTotal ? g.memUsed / g.memTotal : 0, F.pct(g.memTotal ? g.memUsed / g.memTotal * 100 : 0))}
             <div class="muted small">显存 ${F.bytes(g.memUsed)} / ${F.bytes(g.memTotal)}${g.power != null ? ` · ${Math.round(g.power)} W` : ''}</div></div>`).join('');
     } else if (k === 'net') {
       body = big('↓ ' + F.rate(s.rxRate), `↑ ${F.rate(s.txRate)} · ${s.tcp} 个 TCP 连接`) +
-        s.nets.slice(0, 8).map((n) => `<div><b class="mono" style="font-size:12px">${esc(n.name)}</b><div class="row mono muted small" style="font-size:11px"><span>↓ ${F.rate(n.rxRate)}</span><span class="spacer"></span><span>↑ ${F.rate(n.txRate)}</span></div></div>`).join('');
+        s.nets.slice(0, 8).map((n) => `<div><b class="mono" style="font-size:0.75rem">${esc(n.name)}</b><div class="row mono muted small" style="font-size:0.6875rem"><span>↓ ${F.rate(n.rxRate)}</span><span class="spacer"></span><span>↑ ${F.rate(n.txRate)}</span></div></div>`).join('');
     } else {
       body = big('读 ' + F.rate(s.ioRead), `写 ${F.rate(s.ioWrite)}`) +
-        s.mounts.slice(0, 8).map((m) => `<div class="col" style="gap:2px"><div class="row ${mountFrac(m) > 0.9 ? 'red' : ''}"><b class="mono grow" style="font-size:12px">${esc(m.mount)}</b><span class="mono small">${F.pct(mountFrac(m) * 100)}</span></div>${bar(mountFrac(m))}</div>`).join('');
+        s.mounts.slice(0, 8).map((m) => `<div class="col" style="gap:2px"><div class="row ${mountFrac(m) > 0.9 ? 'red' : ''}"><b class="mono grow" style="font-size:0.75rem">${esc(m.mount)}</b><span class="mono small">${F.pct(mountFrac(m) * 100)}</span></div>${bar(mountFrac(m))}</div>`).join('');
     }
     return card(body, { kicker: sub[2], title: sub[1], lit: true });
   };
@@ -104,9 +104,9 @@ export function mount(el, { id }) {
           <div class="col" style="flex:1 1 320px;min-width:280px;gap:4px"><div class="row base"><span class="big" id="gpuAvg"></span><span class="muted">平均推力 · 每块显卡是这艘船的一台引擎：尾焰越长越忙，喷管越红越热，燃料罐水位是显存</span></div><canvas data-c="gpu" style="width:100%;height:150px"></canvas></div>
           <div class="gpugrid" style="flex:3 1 520px">${gpus.map((g) => `<div class="gpucard sk click" data-act="gpu" data-g="${g.index}" title="点击查看这台引擎（显卡）的详情">
             <canvas class="engine" data-g="${g.index}"></canvas>
-            <div class="row base" style="gap:6px"><b class="mono">引擎 #${g.index}</b><span class="spacer"></span><b class="hand" data-v="util" style="font-size:20px"></b></div>
-            <div class="mono muted" data-v="mem" style="font-size:11px"></div>
-            <div class="row mono" style="font-size:11px;gap:6px"><span data-v="temp"></span><span class="spacer"></span><span data-v="power" class="muted"></span></div></div>`).join('')}</div>
+            <div class="row base" style="gap:6px"><b class="mono">引擎 #${g.index}</b><span class="spacer"></span><b class="hand" data-v="util" style="font-size:1.25rem"></b></div>
+            <div class="mono muted" data-v="mem" style="font-size:0.6875rem"></div>
+            <div class="row mono" style="font-size:0.6875rem;gap:6px"><span data-v="temp"></span><span class="spacer"></span><span data-v="power" class="muted"></span></div></div>`).join('')}</div>
         </div></div>`;
       sketchAll(bay);
     }
@@ -145,7 +145,7 @@ export function mount(el, { id }) {
     renderBay(s, hist);
 
     el.querySelector('#disks').innerHTML = card(s && s.mounts.length ? `<table class="sheet"><tr><th>挂载点</th><th>用量</th><th class="r">已用 / 总量</th><th class="r">%</th></tr>` +
-      s.mounts.map((m) => `<tr class="${mountFrac(m) > 0.9 ? 'red' : ''}"><td class="hand name" title="${esc(m.mount)}"><b data-notr>${esc(m.mount)}</b><div class="mono muted" data-notr style="font-size:10px">${esc(m.fs)} · ${esc(m.type)}</div></td><td style="min-width:90px">${bar(mountFrac(m), null, 11)}</td><td class="r">${F.bytes(m.used)} / ${F.bytes(m.used + m.avail)}</td><td class="r"><b>${F.pct(mountFrac(m) * 100)}</b></td></tr>`).join('') + '</table>'
+      s.mounts.map((m) => `<tr class="${mountFrac(m) > 0.9 ? 'red' : ''}"><td class="hand name" title="${esc(m.mount)}"><b data-notr>${esc(m.mount)}</b><div class="mono muted" data-notr style="font-size:0.625rem">${esc(m.fs)} · ${esc(m.type)}</div></td><td style="min-width:90px">${bar(mountFrac(m), null, 11)}</td><td class="r">${F.bytes(m.used)} / ${F.bytes(m.used + m.avail)}</td><td class="r"><b>${F.pct(mountFrac(m) * 100)}</b></td></tr>`).join('') + '</table>'
       : '<div class="muted">没有可显示的挂载点。</div>', { kicker: 'Storage', title: '挂载点', lit: hero.focus === 'disk' });
     el.querySelector('#nets').innerHTML = card(s && s.nets.length ? `<table class="sheet"><tr><th>名称</th><th class="r">下行</th><th class="r">上行</th><th class="r">累计 收 / 发</th></tr>` +
       s.nets.slice(0, 10).map((n) => `<tr><td class="name" title="${esc(n.name)}"><b data-notr>${esc(n.name)}</b></td><td class="r">${F.rate(n.rxRate)}</td><td class="r">${F.rate(n.txRate)}</td><td class="r">${F.bytes(n.rx)} / ${F.bytes(n.tx)}</td></tr>`).join('') + '</table>'

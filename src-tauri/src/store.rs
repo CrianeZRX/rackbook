@@ -83,12 +83,20 @@ impl Store {
 
     // ---------- embedded terminal ----------
 
-    /// Opens a login shell on the server's existing connection and streams its output as "term" events.
-    pub async fn term_open(self: &Arc<Self>, id: Uuid, cols: u32, rows: u32) -> Result<String, String> {
+    /// Opens a server or image shell and streams its output as "term" events.
+    pub async fn term_open(self: &Arc<Self>, id: Uuid, cols: u32, rows: u32, image: Option<&str>) -> Result<String, String> {
         use base64::Engine;
-        let c = self.conn(id).await?;
-        let (mut rd, wr) = c.shell(cols, rows).await.map_err(|e| crate::ssh::friendly(&e.to_string()))?;
         let tid = Uuid::new_v4().to_string();
+        let (command, auth) = match image {
+            Some(image) => {
+                let (cmd, auth) = self.image_shell(id, image, &tid).await?;
+                (Some(cmd), auth)
+            }
+            None => (None, None),
+        };
+        let c = self.conn(id).await?;
+        let (mut rd, wr) = c.shell(cols, rows, command.as_deref(), auth.as_ref().map(|(prompt, ready, password)| (prompt.as_str(), ready.as_str(), password.as_str())))
+            .await.map_err(|e| crate::ssh::friendly(&e.to_string()))?;
         self.terms.lock().await.insert(tid.clone(), Arc::new(wr));
         let me = self.clone();
         let t2 = tid.clone();
@@ -110,6 +118,37 @@ impl Store {
             (me.emit)("term", json!({ "tid": t2, "closed": true }));
         });
         Ok(tid)
+    }
+
+    async fn image_shell(&self, id: Uuid, image: &str, tid: &str) -> Result<(String, Option<(String, String, String)>), String> {
+        let digest = image.strip_prefix("sha256:").unwrap_or(image);
+        if !(12..=64).contains(&digest.len()) || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("无法识别 Docker 镜像 ID".into());
+        }
+        let acct = self.server(id).and_then(|s| s.active().cloned()).ok_or("没有登舰账户")?;
+        let check = self.docker(id, "version --format '{{.Server.Version}}'", 15).await;
+        if !check.ok() { return Err(format!("Docker：{}", if check.err.trim().is_empty() { check.code.to_string() } else { check.err.trim().to_owned() })); }
+        if self.server(id).and_then(|s| s.active().map(|a| a.id)) != Some(acct.id) {
+            return Err("登舰账户已切换，请重新打开终端".into());
+        }
+        let name = format!("rackbook-shell-{tid}");
+        let cmd = format!(
+            "trap 'docker rm -f {name} >/dev/null 2>&1' EXIT; trap 'exit 129' HUP; trap 'exit 143' TERM; \
+             docker run --rm --pull=never --name {name} -it --entrypoint /bin/sh {} -i", shq(image)
+        );
+        if !self.docker_via_sudo(id) || acct.privilege == Privilege::Root { return Ok((cmd, None)); }
+        if acct.privilege == Privilege::Nopasswd { return Ok((format!("sudo -n sh -c {}", shq(&cmd)), None)); }
+        let password = self.sudo_password(&acct).filter(|_| acct.privilege == Privilege::Password)
+            .ok_or("Docker 终端需要可用的 sudo 密码")?;
+        let prompt = format!("__rackbook_password_{tid}__");
+        let ready = format!("__rackbook_ready_{tid}__");
+        // Wait for sudo's own prompt before sending the secret, with echo disabled on the outer PTY.
+        let privileged = format!("stty echo; printf %s {}; {cmd}", shq(&ready));
+        let script = format!(
+            "stty -echo || exit 1; sudo -k -S -p {} sh -c {}; status=$?; stty echo; exit \"$status\"",
+            shq(&prompt), shq(&privileged)
+        );
+        Ok((script, Some((prompt, ready, password))))
     }
 
     pub async fn term_write(&self, tid: &str, data: &[u8]) -> Result<(), String> {

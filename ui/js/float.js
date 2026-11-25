@@ -3,7 +3,7 @@ import { invoke, listen, currentWindow, isTauri } from './api.js';
 import { S, liveOf, health, healthLabel, title, alerts, memFrac, worstDisk, mountFrac, gpuUtil, loadText, phaseText, onlineCount } from './state.js';
 import { meter, dot, delegate } from './ui.js';
 import { miniShip } from './ships.js';
-import { C, paperTooth, sketchAll } from './kit.js';
+import { C, paperTooth, sketchAll, scaledFontSize, setTextScale } from './kit.js';
 import { setLang, startDomTranslation, getLang } from './i18n.js';
 import * as F from './fmt.js';
 import { esc } from './fmt.js';
@@ -17,8 +17,8 @@ function metricRow(m, s) {
     case 'mem': return meter('MEM', memFrac(s), F.pct(memFrac(s) * 100));
     case 'disk': { const w = worstDisk(s); return meter('DISK', w ? mountFrac(w) : 0, F.pct((w ? mountFrac(w) : 0) * 100)); }
     case 'gpu': return s.gpus.length ? meter('GPU', gpuUtil(s) / 100, F.pct(gpuUtil(s)), C.pink) : '';
-    case 'net': return `<div class="row mono" style="font-size:10px"><span>↓ ${F.rate(s.rxRate)}</span><span class="spacer"></span><span>↑ ${F.rate(s.txRate)}</span></div>`;
-    case 'load': return `<div class="mono" style="font-size:10px">负载 ${loadText(s)}</div>`;
+    case 'net': return `<div class="row mono" style="font-size:0.625rem"><span>↓ ${F.rate(s.rxRate)}</span><span class="spacer"></span><span>↑ ${F.rate(s.txRate)}</span></div>`;
+    case 'load': return `<div class="mono" style="font-size:0.625rem">负载 ${loadText(s)}</div>`;
   }
   return '';
 }
@@ -27,23 +27,23 @@ function render() {
   const p = S.prefs;
   const ships = S.servers.filter((s) => (!p.floatServers?.length || p.floatServers.includes(s.id)) &&
     (!p.floatAlertsOnly || alerts(liveOf(s.id)).length || liveOf(s.id).phase === 'offline'));
-  card.style.width = (p.floatMode === 'ships' ? 310 : 280) + 'px';
+  card.style.width = Math.round(scaledFontSize(p.floatMode === 'ships' ? 310 : 280)) + 'px';
   card.style.backgroundColor = `rgba(248,243,230,${p.floatOpacity ?? 0.96})`;
   card.style.boxShadow = `4px 4px 0 rgba(93,108,156,${0.14 * (p.floatOpacity ?? 0.96)})`;
-  card.innerHTML = `<div class="row base"><span class="kicker" style="font-size:12px">RACKBOOK · 舰队简报</span><span class="spacer"></span><span class="mono muted" style="font-size:10px">${onlineCount()}/${S.servers.length} 在航</span></div>
+  card.innerHTML = `<div class="row base"><span class="kicker" style="font-size:0.75rem">RACKBOOK · 舰队简报</span><span class="spacer"></span><span class="mono muted" style="font-size:0.625rem">${onlineCount()}/${S.servers.length} 在航</span></div>
     <div class="rule-h" style="height:4px;margin:4px 0 6px" data-width="1"></div>
-    ${!ships.length ? `<div class="muted" style="font-size:14px">${p.floatAlertsOnly ? '一切从容，没有需要留意的舰船。' : '悬浮窗里没有选中的舰船。'}</div>` : ''}
+    ${!ships.length ? `<div class="muted" style="font-size:0.875rem">${p.floatAlertsOnly ? '一切从容，没有需要留意的舰船。' : '悬浮窗里没有选中的舰船。'}</div>` : ''}
     ${ships.map((s) => {
       const l = liveOf(s.id), hl = health(l), sn = l.snap;
       return `<div class="row top" data-id="${s.id}" style="gap:8px;padding:3px 0">
         ${p.floatMode === 'ships' ? `<canvas class="ship" data-id="${s.id}" style="width:58px;height:40px;flex:none"></canvas>` : `<span style="margin-top:4px">${dot(hl, 11)}</span>`}
         <div class="col grow" style="gap:2px;min-width:0">
-          <div class="row base"><b data-notr style="font-size:15px;${hl === 'hot' ? 'color:#c8372f' : ''}">${esc(title(s))}</b><span class="spacer"></span><span class="muted" style="font-size:11px">${healthLabel[hl]}</span></div>
-          ${sn && l.phase === 'online' ? (p.floatMetrics || []).map((m) => metricRow(m, sn)).join('') + alerts(l).slice(0, 2).map((a) => `<div class="red" style="font-weight:700;font-size:12px">● ${esc(a)}</div>`).join('')
-            : `<div class="${l.phase === 'offline' ? 'red' : 'muted'}" style="font-size:12px">${esc(phaseText(l))}</div>`}
+          <div class="row base"><b data-notr style="font-size:0.9375rem;${hl === 'hot' ? 'color:#c8372f' : ''}">${esc(title(s))}</b><span class="spacer"></span><span class="muted" style="font-size:0.6875rem">${healthLabel[hl]}</span></div>
+          ${sn && l.phase === 'online' ? (p.floatMetrics || []).map((m) => metricRow(m, sn)).join('') + alerts(l).slice(0, 2).map((a) => `<div class="red" style="font-weight:700;font-size:0.75rem">● ${esc(a)}</div>`).join('')
+            : `<div class="${l.phase === 'offline' ? 'red' : 'muted'}" style="font-size:0.75rem">${esc(phaseText(l))}</div>`}
         </div></div>`;
     }).join('')}
-    <div class="muted" style="font-size:11px;margin-top:4px">拖动可移动 · 双击登舰 · 右键设置</div>`;
+    <div class="muted" style="font-size:0.6875rem;margin-top:4px">拖动可移动 · 双击登舰 · 右键设置</div>`;
   card.querySelectorAll('canvas.ship').forEach((cv) => miniShip(cv, S.servers.find((x) => x.id === cv.dataset.id), liveOf(cv.dataset.id)));
   sketchAll(card);
   requestAnimationFrame(() => {
@@ -81,13 +81,14 @@ delegate(menu, {
 async function main() {
   const st = await invoke('get_state');
   S.servers = st.servers || []; S.live = st.live || {}; S.prefs = st.prefs || {};
+  setTextScale(S.prefs.fontScale);
   setLang(S.prefs.lang || localStorage.getItem('rackbook.lang') || '');
   startDomTranslation();
   let queued = false;
   const later = () => { if (queued) return; queued = true; setTimeout(() => { queued = false; render(); }, 250); };
   await listen('live', ({ id, live }) => { S.live[id] = live; later(); });
   await listen('servers', (l) => { S.servers = l; later(); });
-  await listen('prefs', (p) => { const relang = p.lang && p.lang !== getLang(); S.prefs = p; if (relang) location.reload(); else later(); });
+  await listen('prefs', (p) => { const relang = p.lang && p.lang !== getLang(); S.prefs = p; setTextScale(p.fontScale); if (relang) location.reload(); else later(); });
   document.fonts?.addEventListener?.('loadingdone', later);
   render();
 }

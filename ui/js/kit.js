@@ -12,6 +12,16 @@ export const WASHES = ['sky', 'sage', 'gold', 'pink', 'rose', 'tan', 'blue', 'st
 export const wash = (n) => C[n] || C.sky;
 export const loadColor = (pct) => (pct < 60 ? C.sage : pct < 85 ? C.gold : C.rose);
 
+export const TEXT_SCALES = [90, 100, 110, 125];
+let textScale = 100;
+
+export function setTextScale(value) {
+  textScale = TEXT_SCALES.includes(value) ? value : 100;
+  document.documentElement.style.fontSize = `${textScale}%`;
+}
+
+export const scaledFontSize = (size) => size * textScale / 100;
+
 // Same stacks as the CSS: Gaegu (Latin + Hangul) first, then the handwritten CJK font for the language.
 const cjk = () => ({ 'zh-TW': '"LXGW WenKai TC","ZCOOL KuaiLe","Yomogi"', ja: '"Yomogi","LXGW WenKai TC","ZCOOL KuaiLe"' }[getLang()] || '"ZCOOL KuaiLe","LXGW WenKai TC","Yomogi"');
 export const FONT = {
@@ -155,7 +165,7 @@ export function circlePts(c, r, n = 18, ry) {
 export function text(ctx, s, x, y, { size = 14, font = 'hand', bold = false, color = C.ink, align = 'left', base = 'alphabetic', raw = false } = {}) {
   if (!raw) s = tr(s);
   ctx.save();
-  ctx.font = `${bold ? '700 ' : ''}${size}px ${FONT[font] || font}`;
+  ctx.font = `${bold ? '700 ' : ''}${scaledFontSize(size)}px ${FONT[font] || font}`;
   ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = base;
   ctx.fillText(s, x, y);
   const w = ctx.measureText(s).width;
@@ -164,7 +174,7 @@ export function text(ctx, s, x, y, { size = 14, font = 'hand', bold = false, col
 }
 export function measure(ctx, s, size = 14, font = 'hand', bold = false) {
   s = tr(s);
-  ctx.save(); ctx.font = `${bold ? '700 ' : ''}${size}px ${FONT[font] || font}`; const w = ctx.measureText(s).width; ctx.restore(); return w;
+  ctx.save(); ctx.font = `${bold ? '700 ' : ''}${scaledFontSize(size)}px ${FONT[font] || font}`; const w = ctx.measureText(s).width; ctx.restore(); return w;
 }
 
 // ---------- isometric projection, viewed along (1,1,1) ----------

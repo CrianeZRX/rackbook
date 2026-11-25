@@ -2,6 +2,7 @@
 import { invoke, listen } from './api.js';
 import * as F from './fmt.js';
 import { setLang, tr, getLang } from './i18n.js';
+import { setTextScale } from './kit.js';
 
 export const S = {
   servers: [],
@@ -32,6 +33,7 @@ export async function boot() {
   S.servers = st.servers || [];
   S.live = st.live || {};
   S.prefs = st.prefs || {};
+  setTextScale(S.prefs.fontScale);
   S.backgrounded = st.backgrounded;
   let saved = null; try { saved = localStorage.getItem('rackbook.lang'); } catch {}
   setLang(S.prefs.lang || saved || '');
@@ -40,7 +42,12 @@ export async function boot() {
   await listen('live', ({ id, live }) => { S.live[id] = live; record(id, live.snap); changed('live'); });
   Object.entries(S.live).forEach(([id, l]) => record(id, l.snap));
   await listen('servers', (list) => { S.servers = list; changed('servers'); });
-  await listen('prefs', (p) => { const relang = p.lang && p.lang !== getLang(); S.prefs = p; if (relang) location.reload(); else changed('prefs'); });
+  await listen('prefs', (p) => {
+    const relang = p.lang && p.lang !== getLang();
+    S.prefs = p;
+    setTextScale(p.fontScale);
+    if (relang) location.reload(); else changed('prefs');
+  });
   await listen('status', ({ text, tone }) => say(text, tone));
 }
 
@@ -98,13 +105,29 @@ export function phaseText(l) {
   }
 }
 
+const FRIGATE = { key: 'frigate', name: '护卫舰', size: 0.9, engines: 2, cores: 3, memoryGib: 4 };
+const SCOUT = { key: 'scout', name: '侦察艇', size: 0.72, engines: 1 };
+export const SHIP_CLASS_TIERS = [
+  { key: 'carrier', name: '母舰', size: 1.35, engines: 3, cores: 32, memoryGib: 128 },
+  { key: 'cruiser', name: '巡洋舰', size: 1.1, engines: 2, cores: 9, memoryGib: 24 },
+  FRIGATE,
+];
+
+export function shipClassThreshold({ key, cores, memoryGib }) {
+  const saved = S.prefs.shipClassThresholds?.[key];
+  return {
+    cores: Number.isInteger(saved?.cores) && saved.cores > 0 ? saved.cores : cores,
+    memoryGib: Number.isFinite(saved?.memoryGib) && saved.memoryGib > 0 ? saved.memoryGib : memoryGib,
+  };
+}
+
 export function shipClass(s) {
-  if (!s) return { key: 'frigate', name: '护卫舰', size: 0.9, engines: 2 };
-  const gb = s.memTotal / 2 ** 30;
-  if (s.cores >= 32 || gb >= 128) return { key: 'carrier', name: '母舰', size: 1.35, engines: 3 };
-  if (s.cores >= 9 || gb >= 24) return { key: 'cruiser', name: '巡洋舰', size: 1.1, engines: 2 };
-  if (s.cores >= 3 || gb >= 4) return { key: 'frigate', name: '护卫舰', size: 0.9, engines: 2 };
-  return { key: 'scout', name: '侦察艇', size: 0.72, engines: 1 };
+  if (!s) return FRIGATE;
+  const memoryGib = s.memTotal / 2 ** 30;
+  return SHIP_CLASS_TIERS.find((tier) => {
+    const min = shipClassThreshold(tier);
+    return s.cores >= min.cores || memoryGib >= min.memoryGib;
+  }) || SCOUT;
 }
 
 export const onlineCount = () => S.servers.filter((s) => liveOf(s.id).phase === 'online').length;
