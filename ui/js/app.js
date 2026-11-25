@@ -23,7 +23,8 @@ function shell() {
       <div class="shiplist" id="ships"></div>
       <div class="sidefoot">
         <div class="row">${btn('＋ 新舰船', { act: 'new', cls: 'solid' })}${btn('从配置导入…', { act: 'import', cls: 'chip', title: '自动查找 ~/.ssh/config 和 PuTTY 里已经配置好的服务器' })}</div>
-        <div class="row">${btn('设置', { act: 'settings', cls: 'chip' })}<select id="langSel" class="field sk" style="width:auto;padding:2px 6px;font-size:14px" title="Language">${LANGS.map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select><span class="spacer"></span>${btn('转入后台', { act: 'bg', cls: 'chip', title: '关闭主窗口但继续监控；任务栏右下角出现舰船图标，可选弹出悬浮窗' })}</div>
+        <div class="row">${btn('设置', { act: 'settings', cls: 'chip' })}<span class="spacer"></span>${btn('转入后台', { act: 'bg', cls: 'chip', title: '关闭主窗口但继续监控；任务栏右下角出现舰船图标，可选弹出悬浮窗' })}</div>
+        <label class="row" style="gap:6px" title="Language"><span style="font-size:15px">🌐</span><select id="langSel" class="field sk" data-notr style="flex:1;min-width:0;padding:2px 6px;font-size:14px">${LANGS.map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select></label>
       </div>
     </aside>
     <div id="rule" class="rule-v" data-width="1.4" data-seed="8"></div>

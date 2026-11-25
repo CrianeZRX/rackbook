@@ -195,3 +195,6 @@ table.sheet td.name > * { overflow: hidden; text-overflow: ellipsis; }
 /* chart headline: the big number stays on one line, the note moves below it when space runs out */
 .card > .row.base { flex-wrap: wrap; row-gap: 0; }
 .card > .row.base > .big { white-space: nowrap; }
+/* sidebar footer buttons shrink with an ellipsis instead of spilling past the sidebar in long languages */
+.sidefoot .row > .btn { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidefoot .row > .btn.solid { flex: none; }
