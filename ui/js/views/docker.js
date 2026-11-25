@@ -16,7 +16,7 @@ function cargo(cv, color, running) {
 const lines = (s) => s.split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
 
 export function mount(el, { id }) {
-  let containers = [], images = [], version = '', loaded = false, busy = false, showStopped = true, filter = '', alive = true, viaSudo = false;
+  let containers = [], images = [], version = '', loaded = false, busy = false, showStopped = true, filter = '', alive = true, viaSudo = false, denied = '';
   el.innerHTML = `<div class="page" style="padding-top:18px">
     <div class="card sk" data-seed="160"><div class="head"><span class="kicker">Cargo hold</span><span class="h">Docker 货舱</span></div>
       <div class="row" id="dstats"></div>
@@ -27,6 +27,14 @@ export function mount(el, { id }) {
   el.querySelector('#dq').addEventListener('input', (e) => { filter = e.target.value.toLowerCase(); render(); });
 
   const render = () => {
+    if (denied) {
+      el.querySelector('#dstats').innerHTML = `<div class="row red" style="font-size:18px;font-weight:700;gap:8px"><span>🔒</span><span>${esc(denied)}</span></div>`;
+      el.querySelector('#dbtns').innerHTML = btn('↻ 重试', { act: 'reload' });
+      el.querySelector('#dcards').innerHTML = '';
+      el.querySelector('#dimgs').innerHTML = '';
+      sketchAll(el);
+      return;
+    }
     const run = containers.filter((c) => c.running).length, p = privilege(id);
     el.querySelector('#dstats').innerHTML = [[run, '运行中'], [containers.length, '货柜总数'], [images.length, '镜像']].map(([b, n]) => `<div style="margin-right:18px"><div class="big">${b}</div><div class="muted small">${n}</div></div>`).join('') +
       `<span class="spacer"></span><div class="col" style="align-items:flex-end;gap:2px"><span class="mono muted" style="font-size:11px">${version ? 'Docker ' + esc(version) : '—'}</span><span class="muted small">${viaSudo ? (canSudo(p) ? '通过 sudo（舰长）' : '需要舰长权限') : '以 ' + esc(active(server(id))?.user || '') + ' 直接操作'}</span></div>`;
@@ -48,18 +56,32 @@ export function mount(el, { id }) {
     sketchAll(el);
   };
 
+  // no docker group and no sudo: say so plainly instead of trying (and showing an endless "reading…")
+  const deniedText = (p) => p === 'needsPassword'
+    ? '这个账户不在 docker 组，需要舰长的 sudo，但还没存 sudo 密码。去「船员 · 权限」页补上密码即可。'
+    : '没有权限：这个账户不在 docker 组，也没有 sudo。换成舰长账户，或让舰长把它加入 docker 组。';
+  const isDenied = (r) => r.code !== 0 && /permission denied|sudo|没有 sudo|领航员|舰长|还没查验/i.test(r.err || '');
   const load = async (quiet) => {
     if (busy) return;
+    const p0 = privilege(id);
+    if (viaSudo && !canSudo(p0)) { denied = deniedText(p0); loaded = true; render(); return; }
     busy = true; render();
-    const [ps, st, im, v] = await Promise.all([
-      invoke('docker', { id, args: "ps -a --format '{{json .}}'" }),
+    // list containers first: if that's refused, don't bother asking for stats, images and version
+    const ps = await invoke('docker', { id, args: "ps -a --format '{{json .}}'" });
+    viaSudo = await invoke('docker_via_sudo', { id });
+    if (ps.code !== 0) {
+      busy = false; loaded = true;
+      if (isDenied(ps) && !canSudo(privilege(id))) { denied = deniedText(privilege(id)); render(); if (!quiet) say('没有权限：管不了货舱。', 'refuse'); return; }
+      if (!quiet) say('还不行：读不了货舱（' + (ps.err.trim() || `退出码 ${ps.code}`) + '）。', 'refuse');
+      render(); return;
+    }
+    denied = '';
+    const [st, im, v] = await Promise.all([
       invoke('docker', { id, args: "stats --no-stream --format '{{json .}}'", timeout: 30 }),
       invoke('docker', { id, args: "images --format '{{json .}}'" }),
       invoke('docker', { id, args: "version --format '{{.Server.Version}}'" }),
     ]);
-    viaSudo = await invoke('docker_via_sudo', { id });
     busy = false;
-    if (ps.code !== 0) { if (!quiet || !loaded) say('还不行：读不了货舱（' + (ps.err.trim() || `退出码 ${ps.code}`) + '）。', 'refuse'); loaded = true; render(); return; }
     const stats = {}; lines(st.out).forEach((d) => { stats[d.Name] = d; });
     containers = lines(ps.out).map((d) => {
       const status = d.Status || ''; const state = d.State || (status.startsWith('Up') ? (status.includes('Paused') ? 'paused' : 'running') : 'exited');

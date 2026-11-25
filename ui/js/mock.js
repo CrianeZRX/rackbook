@@ -82,6 +82,8 @@ const files = {
   '/srv/app/docker-compose.yml': `services:\n  web:\n    image: nginx:1.27\n    ports:\n      - "80:80"\n    volumes:\n      - ./site:/usr/share/nginx/html:ro\n  api:\n    build: ./api\n    environment:\n      DATABASE_URL: postgres://app@db/app\n      DEBUG: false\n    depends_on: [db]\n  db:\n    image: postgres:16\n`,
 };
 
+const navigatorOn = (id) => { const s = servers.find((x) => x.id === id); const ac = s && s.accounts.find((x) => x.id === s.activeAccount); return ac?.privilege === 'none'; };
+const activeUser = (id) => { const s = servers.find((x) => x.id === id); return s?.accounts.find((x) => x.id === s.activeAccount)?.user || ''; };
 export async function invoke(cmd, a) {
   switch (cmd) {
     case 'scan_configs': return a?.path ? [] : [
@@ -108,10 +110,11 @@ export async function invoke(cmd, a) {
     case 'switch_account': sv(a.id).activeAccount = a.account; emit('servers', servers); say('已切换登舰账户（预览）。'); return;
     case 'reprobe': case 'set_sudo_password': case 'forget_host_key': case 'open_terminal': case 'go_background': case 'show_main': case 'float_resize': case 'reset_float': case 'quit_app': return;
     case 'test_connection': return 'Linux 6.8.0 · web-01 · root · 舰长 (root)（预览）';
-    case 'docker_via_sudo': return false;
+    case 'docker_via_sudo': return navigatorOn(a.id);
     case 'write_file': return { out: '', err: '', code: 0 };
     case 'download': case 'upload': return '预览模式：没有真的传输';
-    case 'docker': return mockDocker(a.args);
+    // a navigator outside the docker group: refused, like the real backend
+    case 'docker': return navigatorOn(a.id) ? { code: 1, out: '', err: `领航员 ${activeUser(a.id)} 没有 sudo 权限，这个操作需要舰长` } : mockDocker(a.args);
     case 'sudo': case 'run': return mockRun(a.cmd);
   }
   return null;

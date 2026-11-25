@@ -56,8 +56,15 @@ export function mount(el, { id }) {
   };
   const kill = async (b, sig) => {
     const pid = b.dataset.pid;
+    const me = active(server(id))?.user || '', owner = b.dataset.u, p = privilege(id);
+    const mine = owner === me || me === 'root';
+    // someone else's process needs sudo: refuse straight away when the account has none
+    if (!mine && !canSudo(p)) {
+      say(p === 'needsPassword' ? `没有权限：进程属于 ${owner}，需要舰长的 sudo 密码（去「船员 · 权限」补上）。` : `没有权限：进程属于 ${owner}，${roleName(p)}只能结束自己的进程。`, 'refuse');
+      return;
+    }
     if (!await confirm(`结束进程 ${pid}？`, `「${b.dataset.c}」，属于 ${b.dataset.u}。` + (sig === 'KILL' ? 'SIGKILL 不给进程收尾的机会。' : 'SIGTERM 会请它自行退出。'), sig === 'KILL' ? '强制结束' : '结束')) return;
-    const r = await invoke('run', { id, cmd: `kill -${sig} ${pid}` });
+    const r = mine ? await invoke('run', { id, cmd: `kill -${sig} ${pid}` }) : await invoke('sudo', { id, cmd: `kill -${sig} ${pid}` });
     if (r.code === 0) { say(`已向 ${b.dataset.c}（PID ${pid}）发送 SIG${sig}。`, 'ok'); invoke('refresh', { id }); }
     else say(`没结束掉 PID ${pid}：` + (r.err.includes('not permitted') ? '权限不够（进程不属于当前账户）。' : r.err.trim()), 'refuse');
   };

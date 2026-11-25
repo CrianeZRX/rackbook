@@ -3327,7 +3327,7 @@ dependencies = [
 
 [[package]]
 name = "parking"
-version = "2.2.1"
+version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f38d5652c16fde515bb1ecef450ab0f6a219d619a7274976324d5e377f7dceba"
 
@@ -3801,7 +3801,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rackbook"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
