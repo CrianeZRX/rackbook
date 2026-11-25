@@ -96,8 +96,10 @@ export function go(pane, tab) {
     el.innerHTML = '';
     el.scrollTop = 0;
     const mod = pane === 'fleet' ? fleet : pane === 'settings' ? settings : detail;
-    current = { pane, view: mod.mount(el, { go, editServer, id: pane }) };
+    // choose the tab before mounting: the ship's page mounts whatever S.tab says, so resetting it afterwards left
+    // the previous ship's tab (say, Docker) showing under a tab bar that already said "Teardown"
     if (pane !== 'fleet' && pane !== 'settings') S.tab = tab || 'teardown';
+    current = { pane, view: mod.mount(el, { go, editServer, id: pane }) };
   } else if (tab) {
     current.view?.update?.('tab');
   }
