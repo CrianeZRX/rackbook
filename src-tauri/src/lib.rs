@@ -1,4 +1,5 @@
 pub mod collector;
+pub mod importer;
 pub mod model;
 pub mod secrets;
 pub mod ssh;
@@ -92,6 +93,16 @@ fn get_state(store: S) -> serde_json::Value {
         "prefs": *store.prefs.read().unwrap(),
         "backgrounded": *store.backgrounded.read().unwrap(),
     })
+}
+
+/// Servers already configured elsewhere: ~/.ssh/config (or a file the user picked) and PuTTY sessions.
+#[tauri::command]
+fn scan_configs(path: Option<String>) -> Vec<importer::Found> {
+    let mut v = importer::scan_ssh_config(path.as_ref().map(std::path::PathBuf::from));
+    if path.is_none() {
+        v.extend(importer::scan_putty());
+    }
+    v
 }
 
 #[tauri::command]
@@ -355,6 +366,9 @@ fn quit_app(app: AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run_app() {
     tauri::Builder::default()
+        // must be the first plugin: a second launch (double-clicking the icon again, a second shortcut) only
+        // brings the running Rackbook forward and exits, instead of opening a second, empty copy
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| enter_foreground(app, None)))
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
@@ -434,7 +448,7 @@ pub fn run_app() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            get_state, save_server, delete_server, move_server, connect, disconnect, connect_all, disconnect_all,
+            get_state, scan_configs, save_server, delete_server, move_server, connect, disconnect, connect_all, disconnect_all,
             refresh, switch_account, reprobe, set_sudo_password, test_connection, forget_host_key, run, sudo, docker,
             docker_via_sudo, write_file, download, upload, open_terminal, set_prefs, go_background, show_main,
             float_resize, reset_float, quit_app

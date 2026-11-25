@@ -33,9 +33,21 @@ export function mount(el, { id }) {
     el.querySelector('#goto').addEventListener('keydown', (e) => { if (e.key === 'Enter') list(e.target.value.trim()); });
     el.querySelector('#flt').addEventListener('input', (e) => { filter = e.target.value.toLowerCase(); render(); });
     const fl = el.querySelector('#flist');
-    fl.addEventListener('dblclick', (e) => { const r = e.target.closest('[data-n]'); if (r) open(entries.find((x) => x.name === r.dataset.n)); });
-    fl.addEventListener('click', (e) => { const r = e.target.closest('[data-n]'); if (r) { sel = r.dataset.n; render(); } });
-    fl.addEventListener('contextmenu', (e) => { const r = e.target.closest('[data-n]'); if (!r) return; e.preventDefault(); sel = r.dataset.n; render(); menu(entries.find((x) => x.name === sel), e.clientX, e.clientY); });
+    // selecting only re-colours the rows: re-rendering the table on the first click would replace the row under
+    // the pointer, and the browser then never fires the double-click on it
+    const mark = (name) => {
+      sel = name;
+      fl.querySelectorAll('tr[data-n]').forEach((tr) => (tr.style.background = tr.dataset.n === name ? 'rgba(244,184,41,.5)' : ''));
+    };
+    fl.addEventListener('click', (e) => {
+      const r = e.target.closest('[data-n]');
+      if (!r) return;
+      if (e.detail >= 2) open(entries.find((x) => x.name === r.dataset.n));
+      else mark(r.dataset.n);
+    });
+    fl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && sel) open(entries.find((x) => x.name === sel)); });
+    fl.tabIndex = 0;
+    fl.addEventListener('contextmenu', (e) => { const r = e.target.closest('[data-n]'); if (!r) return; e.preventDefault(); mark(r.dataset.n); menu(entries.find((x) => x.name === sel), e.clientX, e.clientY); });
     // drag & drop upload (Tauri provides real paths through its own drop event)
     if (isTauri && window.__TAURI__.webview) {
       window.__TAURI__.webview.getCurrentWebview().onDragDropEvent((ev) => {

@@ -184,3 +184,6 @@ table.sheet td.r, table.sheet th.r { text-align: right; }
 /* ---------- float panel ---------- */
 body.float { background: transparent; overflow: hidden; }
 body.float #floatcard { margin: 8px; padding: 12px; width: 280px; position: relative; }
+
+/* a badge inside a column keeps its own width instead of stretching across it */
+.col > .badge { align-self: flex-start; }

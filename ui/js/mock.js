@@ -84,6 +84,13 @@ const files = {
 
 export async function invoke(cmd, a) {
   switch (cmd) {
+    case 'scan_configs': return a?.path ? [] : [
+      { name: 'web-01', host: '10.0.0.11', port: 22, user: 'root', keyPath: '~/.ssh/id_ed25519', source: '~/.ssh/config', note: '' },
+      { name: 'staging', host: 'staging.example.com', port: 2222, user: 'deploy', keyPath: '~/.ssh/deploy_key', source: '~/.ssh/config', note: '' },
+      { name: 'build-box', host: '10.0.3.7', port: 22, user: 'ci', keyPath: '', source: '~/.ssh/config.d/lab', note: '' },
+      { name: 'gpu.internal', host: 'gpu.internal', port: 22, user: 'ml', keyPath: '', source: '~/.ssh/config', note: '使用了 ProxyJump / ProxyCommand，Rackbook 暂不支持' },
+      { name: 'nas', host: '192.168.1.20', port: 22, user: 'admin', keyPath: '', source: 'PuTTY', note: '' },
+    ];
     case 'get_state': return { servers, live, prefs, backgrounded: false };
     case 'set_prefs': prefs = a.prefs; emit('prefs', prefs); return;
     case 'save_server': {

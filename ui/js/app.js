@@ -22,7 +22,7 @@ function shell() {
       <div class="navrow sk" data-act="fleet" id="navFleet"></div>
       <div class="shiplist" id="ships"></div>
       <div class="sidefoot">
-        ${btn('＋ 新舰船', { act: 'new', cls: 'solid' })}
+        <div class="row">${btn('＋ 新舰船', { act: 'new', cls: 'solid' })}${btn('从配置导入…', { act: 'import', cls: 'chip', title: '自动查找 ~/.ssh/config 和 PuTTY 里已经配置好的服务器' })}</div>
         <div class="row">${btn('设置', { act: 'settings', cls: 'chip' })}<select id="langSel" class="field sk" style="width:auto;padding:2px 6px;font-size:14px" title="Language">${LANGS.map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select><span class="spacer"></span>${btn('转入后台', { act: 'bg', cls: 'chip', title: '关闭主窗口但继续监控；任务栏右下角出现舰船图标，可选弹出悬浮窗' })}</div>
       </div>
     </aside>
@@ -37,6 +37,7 @@ function shell() {
   delegate(document.getElementById('sidebar'), {
     fleet: () => go('fleet'),
     new: () => editServer(null),
+    import: () => importServers(),
     settings: () => go('settings'),
     bg: () => goBackground(),
     ship: (el) => go(el.dataset.id),
@@ -224,6 +225,70 @@ export async function editServer(id) {
   });
 }
 
+// ---------------- import from ~/.ssh/config and PuTTY ----------------
+
+const sameShip = (f) => S.servers.some((s) => s.host.toLowerCase() === f.host.toLowerCase() && s.port === f.port &&
+  (!f.user || s.accounts.some((a) => a.user === f.user)));
+
+export async function importServers({ auto = false } = {}) {
+  let found = [];
+  try { found = await invoke('scan_configs', { path: null }); } catch (e) { say('读取配置失败：' + e, 'warn'); }
+  if (auto && !found.some((f) => !sameShip(f))) return;
+  const picked = new Set(found.filter((f) => !sameShip(f) && !f.note).map((f) => f.name));
+  let source = '~/.ssh/config · PuTTY';
+
+  const row = (f) => {
+    const dup = sameShip(f);
+    const on = picked.has(f.name);
+    return `<div class="row top" style="gap:10px;padding:6px 4px;border-bottom:1px dashed #cfc7b3;${dup ? 'opacity:.5' : ''}">
+      ${dup ? '<span style="width:17px"></span>' : check('', on, 'pick', `data-n="${esc(f.name)}"`)}
+      <div class="col grow" style="gap:1px;min-width:0">
+        <div class="row base"><b data-notr style="font-size:17px">${esc(f.name)}</b><span class="mono muted" data-notr style="font-size:12px">${esc(f.user ? f.user + '@' : '')}${esc(f.host)}${f.port !== 22 ? ':' + f.port : ''}</span><span class="spacer"></span>${dup ? '<span class="muted" style="font-size:13px">已在舰队中</span>' : ''}</div>
+        <div class="mono muted" data-notr style="font-size:11px">${esc(f.keyPath || '')}${f.keyPath ? ' · ' : ''}${esc(f.source)}</div>
+        ${f.note ? `<div class="red" style="font-size:13px">${esc(f.note)}</div>` : ''}
+      </div></div>`;
+  };
+  const render = (m) => {
+    const n = picked.size;
+    m.innerHTML = `
+      ${titleBlock('Import · 从配置导入', found.length ? `找到 ${found.length} 台服务器` : '没有找到服务器', `来源：${source}`)}
+      <div class="foot">勾选要入列的舰船。登录方式用配置里的用户名和私钥；需要密码的账户，入列后在「修改」里补上密码。</div>
+      <div class="col" style="gap:0;max-height:52vh;overflow:auto">${found.length ? found.map(row).join('') : '<div class="muted" style="padding:14px 4px">这个文件里没有具体的 Host 条目（通配符条目只是模板，不会单独列出）。</div>'}</div>
+      <div class="row">${btn('全选', { act: 'all', cls: 'chip' })}${btn('全不选', { act: 'none', cls: 'chip' })}${btn('选择其他配置文件…', { act: 'file', cls: 'chip' })}<span class="spacer"></span>${btn('取消', { act: 'cancel' })}${btn(n ? `入列 ${n} 艘` : '入列', { act: 'go', cls: 'solid', disabled: !n })}</div>`;
+    sketchAll(m);
+  };
+  await modal('', {
+    width: 720,
+    onMount: (m, close) => {
+      render(m);
+      delegate(m, {
+        cancel: () => close(),
+        pick: (el) => { const k = el.dataset.n; picked.has(k) ? picked.delete(k) : picked.add(k); render(m); },
+        all: () => { found.filter((f) => !sameShip(f)).forEach((f) => picked.add(f.name)); render(m); },
+        none: () => { picked.clear(); render(m); },
+        file: async () => {
+          const f = await openDialog({ multiple: false, directory: false, title: '选择 SSH 配置文件' });
+          if (!f) return;
+          try { found = await invoke('scan_configs', { path: f }); } catch (e) { say('读取配置失败：' + e, 'warn'); return; }
+          source = f; picked.clear(); found.filter((x) => !sameShip(x) && !x.note).forEach((x) => picked.add(x.name)); render(m);
+        },
+        go: async () => {
+          const list = found.filter((f) => picked.has(f.name) && !sameShip(f));
+          let i = S.servers.length;
+          for (const f of list) {
+            const acc = { ...newAccount(0), label: '', user: f.user || 'root', auth: 'key', keyPath: f.keyPath || '' };
+            const cfg = { id: crypto.randomUUID(), name: f.name, host: f.host, port: f.port || 22, accounts: [acc], activeAccount: acc.id, wash: WASHES[i++ % WASHES.length], interval: 3, paused: false };
+            await invoke('save_server', { cfg, secrets: [] });
+          }
+          close();
+          say(`已入列 ${list.length} 艘舰船，正在逐一呼叫。`, 'ok');
+          go('fleet');
+        },
+      });
+    },
+  });
+}
+
 // ---------------- boot ----------------
 
 async function main() {
@@ -231,6 +296,10 @@ async function main() {
   await boot();
   shell();
   startDomTranslation();
+  if (!S.servers.length && !localStorage.getItem('rackbook.importOffered')) {
+    localStorage.setItem('rackbook.importOffered', '1');
+    setTimeout(() => importServers({ auto: true }), 600);
+  }
   // canvases draw text themselves: fetch the CJK font subsets they need, then redraw
   document.fonts?.addEventListener?.('loadingdone', () => changed('fonts'));
   onChange((what) => {

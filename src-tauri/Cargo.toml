@@ -1,6 +1,6 @@
 [package]
 name = "rackbook"
-version = "2.1.0"
+version = "2.2.0"
 edition = "2021"
 description = "Rackbook — hand-drawn server fleet monitor"
 
@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
