@@ -5,12 +5,13 @@ pub mod secrets;
 pub mod ssh;
 pub mod store;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::json;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, State, WindowEvent};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, State, WebviewWindow, WindowEvent};
 use uuid::Uuid;
 
 use model::*;
@@ -24,6 +25,85 @@ fn uid(s: &str) -> Result<Uuid, String> {
 
 // ---------------- background mode, tray, floating panel ----------------
 
+struct FloatWindowState {
+    requested: Mutex<LogicalSize<f64>>,
+    track_moves: AtomicBool,
+}
+
+fn float_axis(origin: i32, extent: u32, logical: f64, scale: f64, saved: Option<i32>, align_end: bool) -> (i32, u32) {
+    let extent = i64::from(extent.max(1));
+    let inset = ((12.0 * scale).round() as i64).min((extent - 1) / 2);
+    let available = extent - 2 * inset;
+    let size = ((logical * scale).ceil() as i64).clamp(1, available);
+    let start = i64::from(origin) + inset;
+    let end = start + available - size;
+    let position = saved.map(i64::from).unwrap_or(if align_end { end } else { start });
+    (position.clamp(start, end) as i32, size as u32)
+}
+
+fn place_float(app: &AppHandle, w: &WebviewWindow) {
+    let state = app.state::<FloatWindowState>();
+    let requested = *state.requested.lock().unwrap();
+    let store = app.state::<Arc<Store>>();
+    let (saved_x, saved_y) = {
+        let prefs = store.prefs.read().unwrap();
+        (prefs.float_x, prefs.float_y)
+    };
+    let saved = saved_x.zip(saved_y);
+    let saved_monitor = saved.and_then(|(x, y)| {
+        w.available_monitors().ok()?.into_iter().find(|m| {
+            let dx = i64::from(x) - i64::from(m.position().x);
+            let dy = i64::from(y) - i64::from(m.position().y);
+            (0..i64::from(m.size().width)).contains(&dx) && (0..i64::from(m.size().height)).contains(&dy)
+        })
+    });
+    let saved = saved.filter(|_| saved_monitor.is_some());
+    let monitor = saved_monitor
+        .or_else(|| app.get_webview_window("main").and_then(|main| main.current_monitor().ok().flatten()))
+        .or_else(|| w.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
+        state.track_moves.store(false, Ordering::Relaxed);
+        let _ = w.set_size(requested);
+        return;
+    };
+    let work = monitor.work_area();
+    let scale = monitor.scale_factor();
+    let (x, width) = float_axis(work.position.x, work.size.width, requested.width, scale, saved.map(|p| p.0), true);
+    let (y, height) = float_axis(work.position.y, work.size.height, requested.height, scale, saved.map(|p| p.1), false);
+    let position = PhysicalPosition::new(x, y);
+    let size = PhysicalSize::new(width, height);
+    let moved = w.outer_position().ok() != Some(position);
+    let resized = w.inner_size().ok() != Some(size);
+    if moved || resized {
+        // A layout adjustment shouldn't be mistaken for a drag and become a saved position.
+        state.track_moves.store(false, Ordering::Relaxed);
+        if moved { let _ = w.set_position(position); }
+        if resized { let _ = w.set_size(size); }
+    }
+}
+
+#[cfg(test)]
+mod float_position_tests {
+    use super::float_axis;
+
+    #[test]
+    fn right_edge_stays_anchored_as_a_retina_panel_grows() {
+        assert_eq!(float_axis(0, 3840, 296.0, 2.0, None, true), (3224, 592));
+        assert_eq!(float_axis(0, 3840, 366.0, 2.0, None, true), (3084, 732));
+    }
+
+    #[test]
+    fn saved_position_is_kept_or_clamped_to_the_monitor() {
+        assert_eq!(float_axis(-1920, 1920, 300.0, 1.0, Some(-1100), true), (-1100, 300));
+        assert_eq!(float_axis(-1920, 1920, 300.0, 1.0, Some(-100), true), (-312, 300));
+    }
+
+    #[test]
+    fn tall_panel_fits_below_the_menu_bar() {
+        assert_eq!(float_axis(64, 900, 1000.0, 2.0, Some(24), false), (88, 852));
+    }
+}
+
 fn sync_float(app: &AppHandle) {
     let store = app.state::<Arc<Store>>();
     let Some(w) = app.get_webview_window("float") else { return };
@@ -31,12 +111,7 @@ fn sync_float(app: &AppHandle) {
     let prefs = store.prefs.read().unwrap().clone();
     let any = !store.servers.read().unwrap().is_empty();
     if bg && prefs.float_enabled && any {
-        if let (Some(x), Some(y)) = (prefs.float_x, prefs.float_y) {
-            let _ = w.set_position(PhysicalPosition::new(x, y));
-        } else if let Ok(Some(m)) = w.primary_monitor() {
-            let sz = m.size();
-            let _ = w.set_position(PhysicalPosition::new(sz.width as i32 - 360, 24));
-        }
+        place_float(app, &w);
         let _ = w.show();
     } else {
         let _ = w.hide();
@@ -339,8 +414,13 @@ fn open_terminal(store: S, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn set_prefs(app: AppHandle, store: S, prefs: Prefs) {
-    let relang = store.prefs.read().unwrap().lang != prefs.lang;
+fn set_prefs(app: AppHandle, store: S, mut prefs: Prefs) {
+    let relang = {
+        let current = store.prefs.read().unwrap();
+        prefs.float_x = current.float_x;
+        prefs.float_y = current.float_y;
+        current.lang != prefs.lang
+    };
     let lang = prefs.lang.clone();
     store.save_prefs(prefs);
     if relang {
@@ -364,13 +444,29 @@ fn show_main(app: AppHandle, server: Option<String>) {
 
 #[tauri::command]
 fn float_resize(app: AppHandle, width: f64, height: f64) {
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return;
+    }
     if let Some(w) = app.get_webview_window("float") {
-        let _ = w.set_size(LogicalSize::new(width, height));
+        *app.state::<FloatWindowState>().requested.lock().unwrap() = LogicalSize::new(width, height);
+        place_float(&app, &w);
+    }
+}
+
+#[tauri::command]
+fn float_drag(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("float") {
+        let state = app.state::<FloatWindowState>();
+        state.track_moves.store(true, Ordering::Relaxed);
+        if w.start_dragging().is_err() {
+            state.track_moves.store(false, Ordering::Relaxed);
+        }
     }
 }
 
 #[tauri::command]
 fn reset_float(app: AppHandle, store: S) {
+    app.state::<FloatWindowState>().track_moves.store(false, Ordering::Relaxed);
     let mut p = store.prefs.read().unwrap().clone();
     p.float_x = None;
     p.float_y = None;
@@ -392,6 +488,10 @@ pub fn run_app() {
         // brings the running Rackbook forward and exits, instead of opening a second, empty copy
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| enter_foreground(app, None)))
         .plugin(tauri_plugin_dialog::init())
+        .manage(FloatWindowState {
+            requested: Mutex::new(LogicalSize::new(300.0, 240.0)),
+            track_moves: AtomicBool::new(false),
+        })
         .setup(|app| {
             let handle = app.handle().clone();
             let emit_handle = handle.clone();
@@ -455,6 +555,9 @@ pub fn run_app() {
                     }
                 }
                 ("float", WindowEvent::Moved(pos)) => {
+                    if !app.state::<FloatWindowState>().track_moves.load(Ordering::Relaxed) {
+                        return;
+                    }
                     let store = app.state::<Arc<Store>>();
                     let mut p = store.prefs.read().unwrap().clone();
                     if p.float_x != Some(pos.x) || p.float_y != Some(pos.y) {
@@ -473,7 +576,7 @@ pub fn run_app() {
             get_state, scan_configs, term_open, term_write, term_resize, term_close, save_server, delete_server, move_server, connect, disconnect, connect_all, disconnect_all,
             refresh, switch_account, reprobe, set_sudo_password, test_connection, forget_host_key, run, sudo, docker,
             docker_via_sudo, write_file, download, upload, open_terminal, set_prefs, go_background, show_main,
-            float_resize, reset_float, quit_app
+            float_resize, float_drag, reset_float, quit_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running Rackbook");

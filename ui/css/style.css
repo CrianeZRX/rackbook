@@ -182,8 +182,13 @@ table.sheet td.r, table.sheet th.r { text-align: right; }
 .receipt pre { margin: 0; font-family: var(--mono); font-size: 0.75rem; white-space: pre-wrap; word-break: break-all; user-select: text; }
 
 /* ---------- float panel ---------- */
-body.float { background: transparent; overflow: hidden; }
-body.float #floatcard { margin: 8px; padding: 12px; width: 280px; position: relative; }
+body.float { background: transparent; overflow-x: hidden; overflow-y: auto; }
+body.float #floatcard { margin: 8px; padding: 12px; width: 280px; max-width: calc(100% - 16px); position: relative; overflow-wrap: anywhere; }
+.float-heading { flex-wrap: wrap; }
+.float-heading .mono, .float-health, body.float .meter .val { white-space: nowrap; }
+.float-ship-name { font-size: .9375rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.float .meter .bar { min-width: 0; }
+body.float #fmenu { max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; }
 
 /* a badge inside a column keeps its own width instead of stretching across it */
 .col > .badge { align-self: flex-start; }
