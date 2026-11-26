@@ -16,8 +16,9 @@ echo @@LOAD; cat /proc/loadavg 2>/dev/null
 echo @@STAT; grep '^cpu' /proc/stat 2>/dev/null
 echo @@MEM; cat /proc/meminfo 2>/dev/null
 echo @@NET; cat /proc/net/dev 2>/dev/null
-echo @@DF; df -PkT 2>/dev/null || df -Pk 2>/dev/null
 echo @@IO; cat /proc/diskstats 2>/dev/null
+if [ "${1:-}" = quick ]; then echo @@END; exit 0; fi
+echo @@DF; df -PkT 2>/dev/null || df -Pk 2>/dev/null
 echo @@PS; ps -eo pid=,user=,pcpu=,pmem=,rss=,comm= --sort=-pcpu 2>/dev/null | head -n 80
 echo @@USERS; getconf CLK_TCK 2>/dev/null || echo 100; getconf PAGESIZE 2>/dev/null || echo 4096
 { awk -F: '{print "P", $3, $1}' /etc/passwd 2>/dev/null; stat -c 'U %u %n' /proc/[0-9]* 2>/dev/null; awk '{l=$0; sub(/^[^)]*\) /,"",l); split(l,f," "); p=FILENAME; sub(/\/stat$/,"",p); print "S", p, f[12]+f[13], f[22]}' /proc/[0-9]*/stat 2>/dev/null; } | awk '$1=="P"{nm[$2]=$3; next} $1=="U"{u[$3]=$2; next} $1=="S"{k=($2 in u)? u[$2] : "?"; c[k]+=$3; m[k]+=$4; n[k]++} END{for(k in c){name=(k in nm)?nm[k]:k; print name, c[k], m[k], n[k]}}'
@@ -31,11 +32,13 @@ echo @@END
 #[derive(Clone, Debug, Default)]
 pub struct Raw {
     pub time: f64,
+    pub uptime: Option<f64>,
     pub cpu: HashMap<String, Vec<u64>>,
     pub net: HashMap<String, (u64, u64)>,
     pub io: HashMap<String, (u64, u64)>,
     /// cumulative CPU ticks per user, for the per-user CPU rate
     pub users: HashMap<String, u64>,
+    pub users_at: f64,
 }
 
 pub fn now() -> f64 {
@@ -76,16 +79,18 @@ pub fn build(out: &str, prev: Option<&Raw>) -> Option<(Snapshot, Raw)> {
         return None;
     }
     let t = now();
-    let dt = prev.map(|p| t - p.time).unwrap_or(0.0);
-    let mut s = Snapshot { time: t, ..Default::default() };
     let get = |k: &str| d.get(k).cloned().unwrap_or_default();
+    let uptime: Option<f64> = get("UPTIME").first().and_then(|line| ws(line).first().and_then(|v| v.parse().ok()));
+    let prev = prev.filter(|p| p.uptime.zip(uptime).map_or(true, |(before, current)| current >= before));
+    let dt = prev.map(|p| p.uptime.zip(uptime).map_or(t - p.time, |(before, current)| current - before)).unwrap_or(0.0);
+    let full = d.contains_key("DF");
+    let mut s = Snapshot { time: t, details_time: if full { t } else { 0.0 }, uptime: uptime.unwrap_or(0.0), ..Default::default() };
 
     let host = get("HOST");
     s.hostname = host.first().map(|x| x.to_string()).unwrap_or_default();
     s.kernel = host.get(1).map(|x| x.to_string()).unwrap_or_default();
     s.os = get("OS").first().map(|x| x.to_string()).unwrap_or_default();
     s.cores = get("NPROC").first().and_then(|x| x.trim().parse().ok()).unwrap_or(1);
-    s.uptime = get("UPTIME").first().and_then(|l| ws(l).first().and_then(|v| v.parse().ok())).unwrap_or(0.0);
     if let Some(l) = get("LOAD").first() {
         let f = ws(l);
         s.load = f.iter().take(3).map(|v| v.parse().unwrap_or(0.0)).collect();
@@ -211,9 +216,12 @@ pub fn build(out: &str, prev: Option<&Raw>) -> Option<(Snapshot, Raw)> {
         });
     }
     // Users: CPU from the change in their processes' cumulative ticks since the last sample, memory from RSS pages
-    let mut users_raw: HashMap<String, u64> = HashMap::new();
-    {
+    let mut users_raw = HashMap::new();
+    let users_at;
+    if full {
         let u = get("USERS");
+        users_at = uptime.unwrap_or(t);
+        let users_dt = prev.filter(|p| p.uptime.is_some() == uptime.is_some()).map_or(0.0, |p| users_at - p.users_at);
         let clk: f64 = u.first().and_then(|x| x.trim().parse().ok()).filter(|v: &f64| *v > 0.0).unwrap_or(100.0);
         let page: f64 = u.get(1).and_then(|x| x.trim().parse().ok()).filter(|v: &f64| *v > 0.0).unwrap_or(4096.0);
         let cores = (s.cores.max(1)) as f64;
@@ -224,10 +232,10 @@ pub fn build(out: &str, prev: Option<&Raw>) -> Option<(Snapshot, Raw)> {
             let name = f[0].to_string();
             let mut core_used = 0.0;
             if let Some(p) = prev {
-                if dt > 0.0 {
+                if users_dt > 0.0 {
                     if let Some(&pt) = p.users.get(&name) {
                         // a process that exited takes its ticks with it: never report negative use
-                        core_used = (ticks.saturating_sub(pt) as f64 / clk / dt).max(0.0);
+                        core_used = (ticks.saturating_sub(pt) as f64 / clk / users_dt).max(0.0);
                     }
                 }
             }
@@ -235,6 +243,9 @@ pub fn build(out: &str, prev: Option<&Raw>) -> Option<(Snapshot, Raw)> {
             s.users.push(UserUse { user: name, cores: core_used, cpu: (core_used / cores * 100.0).min(100.0), rss: pages * page, procs: n });
         }
         s.users.sort_by(|a, b| b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal).then(b.rss.partial_cmp(&a.rss).unwrap_or(std::cmp::Ordering::Equal)));
+    } else {
+        users_raw = prev.map(|p| p.users.clone()).unwrap_or_default();
+        users_at = prev.map_or(0.0, |p| p.users_at);
     }
     s.tcp = get("TCP").first().and_then(|x| x.trim().parse().ok()).unwrap_or(0);
 
@@ -273,5 +284,5 @@ pub fn build(out: &str, prev: Option<&Raw>) -> Option<(Snapshot, Raw)> {
     }
     s.has_docker = get("DOCKER").iter().any(|l| l.trim() == "yes");
 
-    Some((s, Raw { time: t, cpu, net, io, users: users_raw }))
+    Some((s, Raw { time: t, uptime, cpu, net, io, users: users_raw, users_at }))
 }

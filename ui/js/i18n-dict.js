@@ -1,5 +1,7 @@
 // Generated: zh-CN source → [en, ja, es, ko, zh-TW]
 export default {
+  "基础指标约每秒更新，显卡、进程和磁盘容量按舰船的刷新间隔采样。": ["Core metrics update about once a second. GPU, process and disk capacity data follow each ship’s refresh interval.", "基本指標は約1秒ごとに更新されます。GPU・プロセス・ディスク容量は艦ごとの更新間隔で取得します。", "Las métricas básicas se actualizan aproximadamente cada segundo. La GPU, los procesos y la capacidad de disco siguen el intervalo de la nave.", "기본 지표는 약 1초마다 갱신됩니다. GPU, 프로세스, 디스크 용량은 함선별 새로 고침 간격에 따라 수집합니다.", "基本指標約每秒更新，顯示卡、程序和磁碟容量依各艦船的重新整理間隔取樣。"],
+  "显卡、进程和磁盘容量按此间隔采样": ["Sampling interval for GPU, process and disk capacity data", "GPU・プロセス・ディスク容量の取得間隔", "Intervalo de muestreo para la GPU, los procesos y la capacidad de disco", "GPU, 프로세스, 디스크 용량의 수집 간격", "顯示卡、程序和磁碟容量依此間隔取樣"],
   "舰级判定": ["Ship classification", "艦級の判定", "Clasificación de naves", "함급 판정", "艦級判定"],
   "CPU 核数": ["CPU cores", "CPU コア数", "Núcleos de CPU", "CPU 코어 수", "CPU 核心數"],
   "内存（GiB）": ["Memory (GiB)", "メモリ（GiB）", "Memoria (GiB)", "메모리(GiB)", "記憶體（GiB）"],

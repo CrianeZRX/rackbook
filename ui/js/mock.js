@@ -85,7 +85,7 @@ function tick() {
   });
 }
 for (let i = 0; i < 60; i++) tick();
-setInterval(tick, 2000);
+setInterval(tick, 1000);
 
 function emit(ev, payload) { (listeners[ev] || []).forEach((cb) => cb(payload)); }
 export async function listen(ev, cb) { (listeners[ev] = listeners[ev] || []).push(cb); return () => {}; }

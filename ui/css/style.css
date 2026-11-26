@@ -317,5 +317,17 @@ tr.prow:hover .act { opacity: 1; }
 .docker-image-table table { min-width: 31rem; }
 .docker-image-table .image-open { font-family: var(--hand); white-space: normal; text-align: left; overflow-wrap: anywhere; }
 #fTitle .title { overflow-wrap: anywhere; }
-#totals { flex-wrap: wrap; }
-#totals > .card { min-width: 10rem; }
+#totals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; }
+@media (max-width: 1000px) { #totals { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 620px) { #totals { grid-template-columns: minmax(0, 1fr); } }
+.fleet-total { container-type: inline-size; }
+.fleet-total-reading { display: flex; align-items: baseline; gap: .22em; min-width: 0; white-space: nowrap; font-size: 1.35rem; font-size: clamp(1.15rem, 14cqi, 1.75rem); font-variant-numeric: tabular-nums; }
+.fleet-total-reading [data-dir]:empty, .fleet-total-unit:empty { display: none; }
+.fleet-total-reading [data-value] { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.fleet-total-unit { font-size: .62em; }
+.fleet-total .bar { flex: none; }
+.fleet-total-spacer { height: 9px; }
+.fleet-total-note, .fleet-ship-alert { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fleet-ship-alert { min-height: 1.35em; font-weight: 700; }
+.metric-line { display: flex; justify-content: space-between; gap: 4px; min-width: 0; white-space: nowrap; }
+.metric-line > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

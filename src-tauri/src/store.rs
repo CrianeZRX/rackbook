@@ -41,6 +41,7 @@ pub struct Store {
     prev: Mutex<HashMap<Uuid, Raw>>,
     conns: tokio::sync::Mutex<HashMap<Uuid, Arc<Conn>>>,
     dial_locks: Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>,
+    sample_locks: Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>,
     loops: Mutex<HashMap<Uuid, JoinHandle<()>>>,
     pub known: Arc<KnownHosts>,
     emit: Emit,
@@ -73,6 +74,7 @@ impl Store {
             prev: Mutex::new(HashMap::new()),
             conns: tokio::sync::Mutex::new(HashMap::new()),
             dial_locks: Mutex::new(HashMap::new()),
+            sample_locks: Mutex::new(HashMap::new()),
             loops: Mutex::new(HashMap::new()),
             emit,
             terms: Default::default(),
@@ -432,16 +434,27 @@ impl Store {
                 if cfg.paused {
                     return;
                 }
-                me.poll(id).await;
-                let l = me.live.read().unwrap().get(&id).cloned().unwrap_or_default();
-                let wait = if l.phase == "offline" {
-                    cfg.interval.max(15.0)
-                } else if l.hist.cpu.is_empty() {
-                    1.0
+                let started = tokio::time::Instant::now();
+                let full = me.live.read().unwrap().get(&id).map_or(true, |l| {
+                    l.phase != "online" || l.snap.as_ref().map_or(true, |snap| {
+                        collector::now() + 0.025 - snap.details_time >= cfg.interval.max(1.0)
+                    })
+                });
+                me.poll_sample(id, full).await;
+                let (offline, details_time) = me.live.read().unwrap().get(&id)
+                    .map_or((false, 0.0), |l| (l.phase == "offline", l.snap.as_ref().map_or(0.0, |s| s.details_time)));
+                if offline {
+                    tokio::time::sleep(Duration::from_secs_f64(cfg.interval.max(15.0))).await;
                 } else {
-                    cfg.interval.max(1.0)
-                };
-                tokio::time::sleep(Duration::from_secs_f64(wait)).await;
+                    let next_quick = started + Duration::from_secs(1);
+                    let until_full = cfg.interval.max(1.0) - (collector::now() - details_time);
+                    let next = if until_full > 0.025 && until_full < 1.0 {
+                        next_quick.min(tokio::time::Instant::now() + Duration::from_secs_f64(until_full))
+                    } else {
+                        next_quick
+                    };
+                    tokio::time::sleep_until(next).await;
+                }
             }
         });
         self.loops.lock().unwrap().insert(id, h);
@@ -454,42 +467,73 @@ impl Store {
     }
 
     pub async fn poll(&self, id: Uuid) {
+        self.poll_sample(id, true).await;
+    }
+
+    async fn poll_sample(&self, id: Uuid, full: bool) {
         let Some(cfg) = self.server(id) else { return };
         if cfg.paused {
             return;
         }
-        {
+        let lock = self.sample_locks.lock().unwrap().entry(id).or_default().clone();
+        let Ok(_sample) = lock.try_lock() else { return };
+        let connecting = {
             let mut m = self.live.write().unwrap();
             let l = m.entry(id).or_default();
-            if l.polling {
-                return;
-            }
-            l.polling = true;
-            if l.snap.is_none() && l.phase != "offline" {
+            if l.snap.is_none() && l.phase != "offline" && l.phase != "connecting" {
                 l.phase = "connecting".into();
+                true
+            } else {
+                false
             }
+        };
+        if connecting {
+            self.emit_live(id);
         }
-        self.emit_live(id);
 
+        let same_target = || self.server(id).is_some_and(|current| {
+            !current.paused && current.host == cfg.host && current.port == cfg.port && current.active_account == cfg.active_account
+        });
         let probed = self.live.read().unwrap().get(&id).and_then(|l| l.probed);
         let res: Result<(), String> = async {
             self.conn(id).await?;
             if probed != cfg.active().map(|a| a.id) {
                 self.probe(id).await;
             }
-            let o = self.run_bytes(id, "sh -s", Some(collector::SCRIPT.as_bytes()), 25).await?;
+            let (cmd, timeout) = if full { ("sh -s", 25) } else { ("sh -s -- quick", 8) };
+            let sample_started = collector::now();
+            let o = self.run_bytes(id, cmd, Some(collector::SCRIPT.as_bytes()), timeout).await?;
             let out = String::from_utf8_lossy(&o.out);
             let prev = self.prev.lock().unwrap().get(&id).cloned();
-            let (snap, raw) = collector::build(&out, prev.as_ref()).ok_or_else(|| {
+            let (mut snap, raw) = collector::build(&out, prev.as_ref()).ok_or_else(|| {
                 let e = String::from_utf8_lossy(&o.err).trim().to_string();
                 if e.is_empty() { "没读到完整数据（目标是 Linux 吗？）".to_string() } else { e }
             })?;
+            if !same_target() {
+                return Ok(());
+            }
             self.prev.lock().unwrap().insert(id, raw);
             let was_down;
             {
                 let mut m = self.live.write().unwrap();
                 let l = m.entry(id).or_default();
                 was_down = l.phase != "online";
+                if full {
+                    snap.details_time = sample_started;
+                } else {
+                    if let Some(previous) = &l.snap {
+                        snap.details_time = previous.details_time;
+                        snap.mounts.clone_from(&previous.mounts);
+                        snap.procs.clone_from(&previous.procs);
+                        snap.gpus.clone_from(&previous.gpus);
+                        snap.users.clone_from(&previous.users);
+                        snap.tcp = previous.tcp;
+                        snap.has_docker = previous.has_docker;
+                        if snap.uptime < previous.uptime {
+                            snap.details_time = 0.0;
+                        }
+                    }
+                }
                 if prev.is_some() {
                     History::push(&mut l.hist.cpu, snap.cpu);
                     History::push(&mut l.hist.mem, if snap.mem_total > 0.0 { snap.mem_used / snap.mem_total * 100.0 } else { 0.0 });
@@ -498,12 +542,12 @@ impl Store {
                     History::push(&mut l.hist.io_r, snap.io_read);
                     History::push(&mut l.hist.io_w, snap.io_write);
                     History::push(&mut l.hist.load, snap.load.first().copied().unwrap_or(0.0));
-                    let g = if snap.gpus.is_empty() { 0.0 } else { snap.gpus.iter().map(|g| g.util).sum::<f64>() / snap.gpus.len() as f64 };
-                    History::push(&mut l.hist.gpu, g);
-                    l.snap = Some(snap.clone());
-                } else if l.snap.is_none() {
-                    l.snap = Some(snap.clone());
+                    if full {
+                        let g = if snap.gpus.is_empty() { 0.0 } else { snap.gpus.iter().map(|g| g.util).sum::<f64>() / snap.gpus.len() as f64 };
+                        History::push(&mut l.hist.gpu, g);
+                    }
                 }
+                l.snap = Some(snap.clone());
                 l.phase = "online".into();
                 l.error.clear();
                 l.last_update = collector::now();
@@ -517,7 +561,7 @@ impl Store {
         }
         .await;
 
-        let still_active = self.server(id).map(|s| !s.paused).unwrap_or(false);
+        let still_active = same_target();
         if let Err(e) = res {
             if still_active {
                 let was = self.live.read().unwrap().get(&id).map(|l| l.phase == "offline").unwrap_or(false);
@@ -525,7 +569,6 @@ impl Store {
                 self.set_live(id, |l| {
                     l.phase = "offline".into();
                     l.error = e.clone();
-                    l.polling = false;
                 });
                 if !was {
                     self.say(format!("「{}」失联：{e}", cfg.title()), "warn");
@@ -533,7 +576,9 @@ impl Store {
                 return;
             }
         }
-        self.set_live(id, |l| l.polling = false);
+        if still_active {
+            self.emit_live(id);
+        }
     }
 
     // ---------- fleet operations ----------
@@ -616,6 +661,7 @@ impl Store {
                 }
             }
             self.live.write().unwrap().remove(&id);
+            self.sample_locks.lock().unwrap().remove(&id);
             self.persist();
             self.emit_servers();
             self.say(format!("「{}」已退出舰队（服务器本身没有任何改动）。", cfg.title()), "info");
@@ -649,7 +695,6 @@ impl Store {
         self.prev.lock().unwrap().remove(&id);
         self.set_live(id, |l| {
             l.phase = "parked".into();
-            l.polling = false;
         });
         self.persist();
         self.emit_servers();

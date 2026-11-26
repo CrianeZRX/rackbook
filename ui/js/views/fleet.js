@@ -21,6 +21,13 @@ function spark(cv, values, color, maxY) {
   kdot(ctx, pts[pts.length - 1], 2.6, C.red, null);
 }
 
+const totalCard = (key, label, color) => card(
+  `<div class="fleet-total-reading big"><span data-dir></span><span data-value data-notr></span><span class="fleet-total-unit" data-unit></span></div>
+   ${color ? bar(0, color) : '<div class="fleet-total-spacer"></div>'}
+   <div class="fleet-total-note muted" data-note></div>`,
+  { kicker: label, cls: 'fleet-total', attrs: `data-total="${key}"` },
+);
+
 export function mount(el, { go, editServer }) {
   el.innerHTML = `<div class="page">
     <div class="row fleet-heading" style="align-items:flex-end">
@@ -36,14 +43,18 @@ export function mount(el, { go, editServer }) {
       <canvas id="chart" style="width:100%;height:520px;cursor:pointer"></canvas>
       <div class="foot"><div id="class-guide" data-notr></div><div>尾焰长度随 CPU 负载，蓝→金→红；虚线护盾表示忙碌或吃紧；蓝点是网络流量。旗舰是未停泊舰船中核数最多的一艘。</div></div>
     </div>
-    <div id="totals" class="row" style="gap:18px;align-items:stretch"></div>
+    <div id="totals">${totalCard('cores', 'Cores')}${totalCard('memory', 'Memory', C.blue)}
+      ${totalCard('traffic', 'Traffic')}${totalCard('storage', 'Storage', C.tan)}</div>
     <div class="kicker" id="catTitle">舰船名录</div>
     <div class="cards" id="cards"></div>
-    <div class="foot">数据经 SSH 从 /proc 读取，每艘按各自间隔刷新。颜色：绿 = 从容，黄 = 忙碌，红 = 吃紧，灰 = 失联，钢灰 = 停泊（主动断开）。</div>
+    <div class="foot">基础指标约每秒更新，显卡、进程和磁盘容量按舰船的刷新间隔采样。</div>
   </div>`;
   el.querySelector('#legend').innerHTML = ['ok', 'warn', 'hot', 'down', 'parked'].map((h) => `<span class="row" style="gap:4px">${dot(h)}<span>${healthLabel[h]}</span></span>`).join('&nbsp;&nbsp;');
   const cv = el.querySelector('#chart');
   const classGuide = el.querySelector('#class-guide');
+  const totals = Object.fromEntries([...el.querySelectorAll('[data-total]')].map((node) => [node.dataset.total, node]));
+  const cards = el.querySelector('#cards');
+  let cardOrder = [];
   let raf = 0, alive = true;
   const loop = (t) => { if (!alive) return; drawChart(cv, t / 1000); raf = requestAnimationFrame(loop); };
   raf = requestAnimationFrame(loop);
@@ -59,7 +70,7 @@ export function mount(el, { go, editServer }) {
     new: () => editServer(null),
   });
 
-  const update = () => {
+  const update = (what, changedShips) => {
     const thresholds = SHIP_CLASS_TIERS.map((tier) => {
       const { cores, memoryGib } = shipClassThreshold(tier);
       return tr(`${tier.name} ≥${cores} 核或 ${memoryGib} GiB`);
@@ -86,17 +97,27 @@ export function mount(el, { go, editServer }) {
     const sum = (f) => snaps.reduce((a, s) => a + f(s), 0);
     const memU = sum((s) => s.memUsed), memT = sum((s) => s.memTotal);
     const dU = sum((s) => s.mounts.reduce((a, m) => a + m.used, 0)), dT = sum((s) => s.mounts.reduce((a, m) => a + m.used + m.avail, 0));
-    const tally = (k, big, note, frac, color) => card(`<div class="big">${esc(big)}</div>${frac != null ? bar(frac, color) : ''}<div class="muted">${esc(note)}</div>`, { kicker: k, style: 'flex:1' });
-    el.querySelector('#totals').innerHTML =
-      tally('Cores', String(sum((s) => s.cores)), '在航舰船的 CPU 核数合计') +
-      tally('Memory', F.bytes(memU), `共 ${F.bytes(memT)}`, memT ? memU / memT : 0, C.blue) +
-      tally('Traffic', `↓ ${F.rate(sum((s) => s.rxRate))}`, `↑ ${F.rate(sum((s) => s.txRate))}`) +
-      tally('Storage', F.bytes(dU), `共 ${F.bytes(dT)}`, dT ? dU / dT : 0, C.tan);
+    const updateTotal = (key, reading, note, direction = '', fraction) => {
+      const tile = totals[key];
+      const [value, unit = ''] = reading.split(' ');
+      const label = tr(note);
+      tile.querySelector('[data-dir]').textContent = direction;
+      tile.querySelector('[data-value]').textContent = value;
+      tile.querySelector('[data-unit]').textContent = unit;
+      tile.querySelector('[data-note]').textContent = label;
+      tile.querySelector('[data-note]').title = label;
+      tile.querySelector('.fleet-total-reading').title = `${direction} ${reading}`.trim();
+      if (fraction != null) tile.querySelector('.bar > i').style.width = `${Math.min(1, Math.max(0, fraction)) * 100}%`;
+    };
+    updateTotal('cores', String(sum((s) => s.cores)), '在航舰船的 CPU 核数合计');
+    updateTotal('memory', F.bytes(memU), `共 ${F.bytes(memT)}`, '', memT ? memU / memT : 0);
+    updateTotal('traffic', F.rate(sum((s) => s.rxRate)), `↑ ${F.rate(sum((s) => s.txRate))}`, '↓');
+    updateTotal('storage', F.bytes(dU), `共 ${F.bytes(dT)}`, '', dT ? dU / dT : 0);
 
-    el.querySelector('#cards').innerHTML = S.servers.map((s, i) => {
+    const shipCard = (s, i) => {
       const l = liveOf(s.id), hl = health(l), sn = l.snap, cls = shipClass(sn), a = active(s);
       const online = sn && l.phase === 'online';
-      const wd = worstDisk(sn);
+      const wd = worstDisk(sn), warnings = alerts(l);
       return card(`
         <div class="row top" style="gap:12px">
           <canvas class="mini" data-id="${s.id}" style="width:104px;height:76px;flex:none"></canvas>
@@ -110,13 +131,29 @@ export function mount(el, { go, editServer }) {
         ${online ? meter('CPU', sn.cpu / 100, F.pct(sn.cpu)) + meter('MEM', memFrac(sn), F.pct(memFrac(sn) * 100)) + meter('DISK', wd ? mountFrac(wd) : 0, F.pct((wd ? mountFrac(wd) : 0) * 100))
           + (sn.gpus.length ? meter('GPU', gpuUtil(sn) / 100, F.pct(gpuUtil(sn)), C.pink) : '')
           + `<canvas class="spark" data-id="${s.id}" style="width:100%;height:34px"></canvas>
-             <div class="row mono" style="font-size:0.6875rem"><span>↓ ${F.rate(sn.rxRate)}</span><span class="spacer"></span><span>↑ ${F.rate(sn.txRate)}</span><span class="spacer"></span><span>load ${F.num(sn.load[0] || 0)}</span></div>
-             ${alerts(l).map((a) => `<div class="red" style="font-weight:700">● ${esc(a)}</div>`).join('')}`
+             <div class="metric-line mono" style="font-size:0.6875rem"><span>↓ ${F.rate(sn.rxRate)}</span><span>↑ ${F.rate(sn.txRate)}</span><span>load ${F.num(sn.load[0] || 0)}</span></div>
+             <div class="fleet-ship-alert red" title="${esc(warnings.join(' · '))}">${warnings.map((warning) => `● ${esc(warning)}`).join(' · ')}</div>`
           : `<div class="${l.phase === 'offline' ? 'red' : 'muted'}" style="font-size:1rem">${esc(phaseText(l))}</div>`}`,
       { lit: hl === 'hot', cls: 'click', attrs: `data-act="open" data-id="${s.id}"` });
-    }).join('');
-    el.querySelectorAll('canvas.mini').forEach((c) => { const s = S.servers.find((x) => x.id === c.dataset.id); miniShip(c, s, liveOf(s.id)); });
-    el.querySelectorAll('canvas.spark').forEach((c) => spark(c, liveOf(c.dataset.id).hist?.cpu, C.gold, 100));
+    };
+    const drawShipCard = (node, ship) => {
+      const live = liveOf(ship.id);
+      miniShip(node.querySelector('canvas.mini'), ship, live);
+      const history = node.querySelector('canvas.spark');
+      if (history) spark(history, live.hist?.cpu, C.gold, 100);
+    };
+    const sameOrder = cardOrder.length === S.servers.length && S.servers.every((s, i) => s.id === cardOrder[i]);
+    if (what === 'live' && changedShips?.size && sameOrder) {
+      S.servers.forEach((ship, i) => {
+        if (!changedShips.has(ship.id)) return;
+        cards.children[i].outerHTML = shipCard(ship, i);
+        drawShipCard(cards.children[i], ship);
+      });
+    } else {
+      cardOrder = S.servers.map((s) => s.id);
+      cards.innerHTML = S.servers.map(shipCard).join('');
+      S.servers.forEach((ship, i) => drawShipCard(cards.children[i], ship));
+    }
   };
   update();
   return { update, destroy: () => { alive = false; cancelAnimationFrame(raf); } };

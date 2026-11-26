@@ -63,7 +63,7 @@ export function goBackground() {
   invoke('go_background');
 }
 
-function renderSidebar() {
+function renderSidebar(changedShips) {
   const brand = document.getElementById('fleet-brand');
   const name = S.prefs.fleetName?.trim();
   brand.toggleAttribute('data-notr', !!name);
@@ -72,17 +72,27 @@ function renderSidebar() {
   nf.classList.toggle('on', S.pane === 'fleet');
   nf.classList.toggle('lit', S.pane === 'fleet');
   nf.innerHTML = `<span class="red" style="font-size:1.125rem;font-weight:700">✦</span><div><div class="h" style="font-size:1.125rem">星图 · 舰队总览</div><div class="mono muted" style="font-size:0.6875rem">${S.servers.length} 艘 · ${onlineCount()} 在航</div></div>`;
-  document.getElementById('ships').innerHTML = S.servers.map((s, i) => {
+  const ships = document.getElementById('ships');
+  const shipRow = (s, i) => {
     const l = liveOf(s.id), hl = health(l), sel = S.pane === s.id, a = active(s), sn = l.snap;
     const body = sn && l.phase === 'online'
       ? meter('CPU', sn.cpu / 100, F.pct(sn.cpu)) + meter('MEM', memFrac(sn), F.pct(memFrac(sn) * 100)) +
-        `<div class="row mono muted" style="font-size:0.625rem"><span>↓ ${F.rate(sn.rxRate)}</span><span class="spacer"></span><span>↑ ${F.rate(sn.txRate)}</span></div>`
+        `<div class="metric-line mono muted" style="font-size:0.625rem"><span>↓ ${F.rate(sn.rxRate)}</span><span>↑ ${F.rate(sn.txRate)}</span></div>`
       : `<div style="font-size:0.8125rem" class="${l.phase === 'offline' ? 'red' : 'muted'}">${esc(phaseText(l))}</div>`;
     return `<div class="shiprow sk${sel ? ' lit' : ''}" data-act="ship" data-id="${s.id}" style="background-color:${sel ? 'rgba(244,184,41,.3)' : 'transparent'};box-shadow:inset 0 0 0 999px ${wash(s.wash)}${sel ? '40' : '22'}">
       <div class="row">${dot(hl, 13)}<span class="name grow" data-notr>${esc(title(s))}</span><span class="mono red" style="font-size:0.625rem">No.${i + 1}</span></div>
       <div class="row">${badge(a?.privilege || 'unknown', true)}<span class="mono muted" style="font-size:0.6875rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(display(s))}</span></div>
       ${body}</div>`;
-  }).join('');
+  };
+  if (changedShips?.size && S.servers.length === ships.children.length) {
+    S.servers.forEach((s, i) => {
+      if (!changedShips.has(s.id)) return;
+      const row = ships.querySelector(`[data-id="${CSS.escape(s.id)}"]`);
+      if (row) row.outerHTML = shipRow(s, i);
+    });
+  } else {
+    ships.innerHTML = S.servers.map(shipRow).join('');
+  }
 }
 
 function renderStatus() {
@@ -177,7 +187,7 @@ export async function editServer(id) {
       ${titleBlock(isNew ? 'New ship · 新舰船入列' : "Ship's log · 修改", isNew ? '添加舰船（服务器）' : title(d), '内置 SSH：支持密钥、带口令的密钥和密码登录')}
       <div class="row"><b style="width:80px;text-align:right">舰名</b><input class="field sk" data-g="name" placeholder="例如 web-01" value="${esc(d.name)}"></div>
       <div class="row"><b style="width:80px;text-align:right">主机</b><input class="field sk mono" data-g="host" placeholder="IP 或域名" value="${esc(d.host)}"><b>端口</b><input class="field sk mono" style="width:90px" data-g="port" value="${d.port}"></div>
-      <div class="row"><b style="width:80px;text-align:right">刷新间隔</b><input class="field sk mono" style="width:70px" data-g="interval" value="${d.interval}"><span>秒</span><span class="spacer"></span>${!isNew ? btn('忘记主机指纹', { act: 'forget', cls: 'chip', title: '服务器重装后指纹会变，确认无误再点' }) : ''}</div>
+      <div class="row"><b style="width:80px;text-align:right" title="显卡、进程和磁盘容量按此间隔采样">刷新间隔</b><input class="field sk mono" style="width:70px" data-g="interval" value="${d.interval}"><span>秒</span><span class="spacer"></span>${!isNew ? btn('忘记主机指纹', { act: 'forget', cls: 'chip', title: '服务器重装后指纹会变，确认无误再点' }) : ''}</div>
       <div class="row"><b style="width:80px;text-align:right">船体颜色</b>${WASHES.map((w) => `<span data-act="wash" data-w="${w}" style="cursor:pointer;width:22px;height:22px;border-radius:50%;background:${wash(w)};border:${d.wash === w ? '2.4px solid #c8372f' : '1px solid #231e16'}"></span>`).join('')}</div>
       <div class="row"><span class="kicker">登舰账户 · 角色</span><span class="spacer"></span>${btn('＋ 添加账户', { act: 'addAcct', cls: 'chip' })}</div>
       <div class="foot">角色按 sudo 权限自动判定：有 sudo 的是舰长，没有的是领航员。所有密码只存在 Windows 凭据管理器里。</div>
@@ -311,12 +321,12 @@ async function main() {
   }
   // canvases draw text themselves: fetch the CJK font subsets they need, then redraw
   document.fonts?.addEventListener?.('loadingdone', () => changed('fonts'));
-  onChange((what) => {
+  onChange((what, ids) => {
     if (what === 'status') { renderStatus(); return; }
-    renderSidebar();
+    renderSidebar(what === 'live' ? ids : undefined);
     renderStatus();
     if (current && current.pane !== 'fleet' && current.pane !== 'settings' && !server(current.pane)) go('fleet');
-    else current?.view?.update?.(what);
+    else if (what !== 'live' || !ids?.size || current?.pane === 'fleet' || ids.has(current?.pane)) current?.view?.update?.(what, ids);
   });
   await listen('navigate', ({ server: sid }) => { if (sid) go(sid); });
   go('fleet');

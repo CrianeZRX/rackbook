@@ -15,12 +15,20 @@ export const S = {
 };
 
 const subs = new Set();
+const changes = new Map();
 let queued = false;
 export function onChange(fn) { subs.add(fn); return () => subs.delete(fn); }
-export function changed(what = 'data') {
+export function changed(what = 'data', id) {
+  if (!changes.has(what)) changes.set(what, new Set());
+  if (id != null) changes.get(what).add(id);
   if (queued) return;
   queued = true;
-  requestAnimationFrame(() => { queued = false; subs.forEach((f) => f(what)); });
+  requestAnimationFrame(() => {
+    queued = false;
+    const pending = [...changes];
+    changes.clear();
+    for (const [kind, ids] of pending) subs.forEach((f) => f(kind, ids));
+  });
 }
 
 export function say(text, tone = 'info') {
@@ -39,7 +47,7 @@ export async function boot() {
   setLang(S.prefs.lang || saved || '');
   if (!S.prefs.lang) { S.prefs.lang = getLang(); invoke('set_prefs', { prefs: S.prefs }); }
   if (S.servers.length) S.status = { text: `正在呼叫 ${S.servers.filter((s) => !s.paused).length} 艘舰船…`, tone: 'info' };
-  await listen('live', ({ id, live }) => { S.live[id] = live; record(id, live.snap); changed('live'); });
+  await listen('live', ({ id, live }) => { S.live[id] = live; record(id, live.snap); changed('live', id); });
   Object.entries(S.live).forEach(([id, l]) => record(id, l.snap));
   await listen('servers', (list) => { S.servers = list; changed('servers'); });
   await listen('prefs', (p) => {
@@ -142,8 +150,9 @@ export const ext = (id) => EXT[id] || (EXT[id] = { t: 0, gpu: {}, users: [] });
 function record(id, snap) {
   if (!snap) return;
   const e = ext(id);
-  if (snap.time === e.t) return;
-  e.t = snap.time;
+  const detailsTime = snap.detailsTime ?? snap.time;
+  if (!detailsTime || detailsTime === e.t) return;
+  e.t = detailsTime;
   for (const g of snap.gpus || []) {
     const h = e.gpu[g.index] || (e.gpu[g.index] = { util: [], mem: [], temp: [], power: [] });
     push(h.util, g.util);

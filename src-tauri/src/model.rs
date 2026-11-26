@@ -205,6 +205,8 @@ pub struct UserUse {
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub time: f64,
+    #[serde(default)]
+    pub details_time: f64,
     pub hostname: String,
     pub kernel: String,
     pub os: String,
@@ -270,8 +272,6 @@ pub struct Live {
     pub probed: Option<Uuid>,
     #[serde(skip)]
     pub docker_sudo: bool,
-    #[serde(skip)]
-    pub polling: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
