@@ -210,8 +210,40 @@ export function drawCrewCabin(cv, command) {
   }
 }
 
+export const ORBIT_LIMIT = 10;
+const orbitLanes = [0.53, 0.78, 0.29, 0.98, 0.13, 0.65, 0.41, 0.88, 0.21, 0.34];
+export const newOrbit = () => ({ last: null, tracks: new Map() });
+
+// Rank belongs to the table, not the orbit. Integrate speed over frame deltas
+// and keep the same lane and phase as long as the astronaut is on screen.
+export function advanceOrbit(scene, users, time) {
+  const elapsed = scene.last == null ? 0 : clamp(time - scene.last, 0, 0.1);
+  scene.last = time;
+  const present = new Set(users.map((u) => u.user));
+  for (const user of scene.tracks.keys()) if (!present.has(user)) scene.tracks.delete(user);
+  const inUse = new Set([...scene.tracks.values()].map((track) => track.lane));
+  const maxRss = Math.max(1, ...users.map((u) => u.rss));
+  const lerp = 1 - Math.exp(-5 * elapsed);
+  return users.map((u) => {
+    const speed = 0.08 + 0.9 * clamp(u.cpu / 50);
+    const size = 27 + 34 * Math.sqrt(u.rss / maxRss);
+    let track = scene.tracks.get(u.user);
+    if (!track) {
+      const lane = orbitLanes.findIndex((_, i) => !inUse.has(i));
+      inUse.add(lane);
+      track = { lane, angle: (lane * 2.399) % (Math.PI * 2), speed, size };
+      scene.tracks.set(u.user, track);
+    } else {
+      track.speed += (speed - track.speed) * lerp;
+      track.size += (size - track.size) * lerp;
+      track.angle = (track.angle + track.speed * elapsed) % (Math.PI * 2);
+    }
+    return { u, ...track };
+  });
+}
+
 /** The busiest users' astronaut rockets orbit the server. Size is memory, thrust and speed are CPU. */
-export function orbitScene(cv, users, colours, time, { center = 'SERVER', current = '', captains = new Set() } = {}) {
+export function orbitScene(cv, users, colours, time, { motion, center = 'SERVER', current = '', captains = new Set() }) {
   const { ctx, w, h } = fitCanvas(cv);
   ctx.clearRect(0, 0, w, h);
   stars(ctx, w, h, 404, 60);
@@ -224,18 +256,13 @@ export function orbitScene(cv, users, colours, time, { center = 'SERVER', curren
   ink(ctx, circlePts(c, pr, 30), { closed: true, width: 1.6, seed: 8 });
   ink(ctx, circlePts(c, pr * 1.5, 34, pr * 0.42), { closed: true, width: 1, color: C.wood, seed: 9, amp: 0.4 });
   text(ctx, center, c[0], c[1] + pr + 16, { size: 12, bold: true, align: 'center', font: 'mono', raw: true });
-  const maxRss = Math.max(1, ...users.map((u) => u.rss));
-  users.forEach((u, i) => {
+  for (const { u, lane: i, angle: a, size } of advanceOrbit(motion, users, time)) {
     // rings spread over the whole canvas: wide ellipses, so labels have room
-    const f = (i + 0.6) / users.length;
+    const f = orbitLanes[i];
     const ring = pr * 2.2 + (RX - pr * 2.2) * f;
     const ry = pr * 1.5 + (RY - pr * 1.5) * f;
     ink(ctx, circlePts(c, ring, 48, ry), { closed: true, width: 0.7, color: alpha(C.pencil, 0.7), seed: 30 + i, amp: 0.3, dash: [3, 5] });
-    // angular speed: a gentle drift at idle, faster with CPU
-    const speed = 0.08 + 0.9 * clamp(u.cpu / 50);
-    const a = (time * speed + i * 2.399) % (Math.PI * 2);
     const p = [c[0] + Math.cos(a) * ring, c[1] + Math.sin(a) * ry];
-    const size = 27 + 34 * Math.sqrt(u.rss / maxRss);
     const col = colours[u.user] || C.sky;
     const dir = Math.atan2(Math.cos(a) * ry, -Math.sin(a) * ring);
     const load = clamp(u.cpu / 40);
@@ -249,7 +276,7 @@ export function orbitScene(cv, users, colours, time, { center = 'SERVER', curren
     const label = u.user.length > 14 ? u.user.slice(0, 13) + '…' : u.user;
     const lx = clamp(p[0], 44, w - 44);
     text(ctx, label, lx, p[1] - size / 2 - 5, { size: 13, bold: true, align: 'center', raw: true });
-  });
+  }
   if (!users.length) text(ctx, '正在清点乘员…', c[0], c[1] + pr + 34, { size: 16, align: 'center', color: C.muted });
 }
 
@@ -259,13 +286,14 @@ export function userStream(cv, hist, order, colours, cores) {
   ctx.clearRect(0, 0, w, h);
   const plot = { x: 40, y: 6, w: w - 46, h: h - 24 };
   // scale to the busiest moment on screen (not the whole machine), capped at the core count
-  const peak = Math.max(0, ...hist.map((m) => Object.values(m).reduce((a, b) => a + b, 0)));
+  const value = (m, user) => Object.hasOwn(m, user) ? m[user] : 0;
+  const peak = Math.max(0, ...hist.map((m) => order.reduce((a, user) => a + value(m, user), 0)));
   const nice = (v) => { const p = 10 ** Math.floor(Math.log10(v)); return Math.ceil(v / p) * p; };
   const ymax = Math.min(Math.max(1, cores || 1), Math.max(1, nice(peak * 1.25 || 1)));
   for (let k = 0; k <= 2; k++) {
     const y = plot.y + plot.h - (plot.h * k) / 2;
     ink(ctx, [[plot.x, y], [plot.x + plot.w, y]], { width: 0.6, color: alpha(C.pencil, 0.6), amp: 0.3, seed: k + 3, over: 0 });
-    text(ctx, `${Math.round((ymax * k) / 2)}`, plot.x - 6, y + 3, { size: 9, font: 'mono', color: C.muted, align: 'right' });
+    text(ctx, `${(ymax * k) / 2}`, plot.x - 6, y + 3, { size: 9, font: 'mono', color: C.muted, align: 'right' });
   }
   text(ctx, '核', plot.x - 30, plot.y + 10, { size: 10, color: C.muted });
   ink(ctx, [[plot.x, plot.y], [plot.x, plot.y + plot.h], [plot.x + plot.w, plot.y + plot.h]], { width: 1.2, seed: 2 });
@@ -274,7 +302,7 @@ export function userStream(cv, hist, order, colours, cores) {
   const x0 = plot.x + plot.w - step * (hist.length - 1);
   const base = hist.map(() => 0);
   for (const user of order) {
-    const top = hist.map((m, i) => base[i] + (m[user] || 0));
+    const top = hist.map((m, i) => base[i] + value(m, user));
     const pts = top.map((v, i) => [x0 + step * i, plot.y + plot.h - plot.h * clamp(v / ymax)]);
     const bot = base.map((v, i) => [x0 + step * i, plot.y + plot.h - plot.h * clamp(v / ymax)]).reverse();
     ctx.beginPath(); [...pts, ...bot].forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]))); ctx.closePath();

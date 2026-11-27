@@ -207,6 +207,8 @@ pub struct Snapshot {
     pub time: f64,
     #[serde(default)]
     pub details_time: f64,
+    #[serde(default)]
+    pub process_cpu_ready: bool,
     pub hostname: String,
     pub kernel: String,
     pub os: String,

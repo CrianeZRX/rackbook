@@ -182,6 +182,7 @@ export async function invoke(cmd, a) {
     case 'download': case 'upload': return '预览模式：没有真的传输';
     // a navigator outside the docker group: refused, like the real backend
     case 'docker': return navigatorOn(a.id) ? { code: 1, out: '', err: `领航员 ${activeUser(a.id)} 没有 sudo 权限，这个操作需要舰长` } : mockDocker(a.args);
+    case 'change_crew_account': return mockChangeCrew(a);
     case 'sudo': case 'run': return mockRun(a.cmd, a.id);
   }
   return null;
@@ -209,26 +210,56 @@ function mockDocker(args) {
   return { code: 0, err: '', out: '' };
 }
 
+const crewByServer = new Map();
+function demoCrew(id) {
+  if (!crewByServer.has(id)) {
+    const names = ['root', 'ubuntu', 'deploy', 'nova', 'orion', 'dba', 'ml', 'release', 'ci', 'backup', 'observer', activeUser(id)].filter(Boolean);
+    crewByServer.set(id, new Map([...new Set(names)].map((name, i) => [name, i === 0 ? 0 : 1000 + i])));
+  }
+  return crewByServer.get(id);
+}
+
+function mockChangeCrew({ id, account, user, removeUid }) {
+  const cfg = sv(id);
+  const denied = (err) => ({ code: 1, out: '', err });
+  if (cfg.activeAccount !== account || !['root', 'nopasswd', 'password'].includes(cfg.accounts.find((a) => a.id === account)?.privilege)) return denied('需要有可用 sudo 权限的舰长账户');
+  const crew = demoCrew(id);
+  if (removeUid == null) {
+    if (crew.has(user)) return denied('这个用户已存在');
+    crew.set(user, Math.max(1000, ...crew.values()) + 1);
+  } else {
+    if (removeUid < 1000 || crew.get(user) !== removeUid || cfg.accounts.some((a) => a.user === user)) return denied('不能删除这个用户');
+    crew.delete(user);
+  }
+  return { code: 0, err: '', out: '' };
+}
+
 function mockCrew(id) {
   const now = Math.floor(Date.now() / 1000);
   const login = activeUser(id) || 'root';
-  const crew = new Set([login, 'root', 'ubuntu', 'deploy', 'nova', 'orion', 'dba', 'ml', 'release', 'ci', 'backup', 'observer']);
+  const crew = demoCrew(id);
   const records = [
     ['root', 1], ['ubuntu', 2], ['deploy', 4], ['nova', 0], ['orion', 41], ['dba', 6],
     ['ml', 14], ['release', 65], ['ci', 2], ['backup', 78],
   ];
   return {
     code: 0, err: '',
-    out: ['@@ME', login, '@@U', ...Array.from(crew, (user, i) =>
-      `${user}:${user === 'root' ? 0 : 1000 + i}:${user === 'root' ? '/root' : '/home/' + user}:${user === 'backup' ? '/usr/sbin/nologin' : '/bin/bash'}:${user === 'root' ? 0 : 1000 + i}`),
+    out: ['@@ME', login, '@@U', ...Array.from(crew, ([user, uid]) =>
+      `${user}:${uid}:${user === 'root' ? '/root' : '/home/' + user}:${user === 'backup' ? '/usr/sbin/nologin' : '/bin/bash'}:${uid}`),
     '@@G', 'sudo:x:27:ubuntu,dba', 'docker:x:999:ubuntu,deploy',
-    '@@CLOCK', now, '@@PROCS', ...Array.from(crew, (user, i) =>
-      ['root', 'nova', 'ci', 'dba', login].includes(user) ? `${user === 'root' ? 0 : 1000 + i} ${i + 2}` : '').filter(Boolean),
+    '@@CLOCK', now, '@@PROCS', ...Array.from(crew, ([user, uid], i) =>
+      ['root', 'nova', 'ci', 'dba', login].includes(user) ? `${uid} ${i + 2}` : '').filter(Boolean),
     '@@LAST', 'observer\t-', ...records.map(([user, days]) => `${user}\t${new Date((now - days * 86400) * 1000).toISOString()}`)].join('\n'),
   };
 }
 
 function mockRun(cmd, id) {
+  const disk = cmd.match(/ rackbook '([\d,]+)'$/);
+  if (cmd.includes('@@DISK') && disk) {
+    const known = new Set([0, ...Array.from({ length: 10 }, (_, i) => 1001 + i)]);
+    return { code: 0, err: '', out: '@@DISK\ncomplete 2\n' + disk[1].split(',').map((uid) =>
+      `${uid} ${known.has(Number(uid)) ? (3 + (Number(uid) * 7) % 71) * 104857600 : 0}`).join('\n') + '\n' };
+  }
   if (cmd.includes('query-compute-apps')) {
     const uu = (i) => `GPU-0000${i}-aaaa`;
     return { code: 0, err: '', out: [0, 1, 2, 3, 4, 5, 6, 7].map((i) => `${i}, ${uu(i)}`).join('\n') + '\n@@\n' +

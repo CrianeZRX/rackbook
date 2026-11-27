@@ -1,6 +1,7 @@
 //! One shell script per poll, read straight from /proc. Nothing is installed on the server.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use regex::Regex;
@@ -19,9 +20,19 @@ echo @@NET; cat /proc/net/dev 2>/dev/null
 echo @@IO; cat /proc/diskstats 2>/dev/null
 if [ "${1:-}" = quick ]; then echo @@END; exit 0; fi
 echo @@DF; df -PkT 2>/dev/null || df -Pk 2>/dev/null
-echo @@PS; ps -eo pid=,user=,pcpu=,pmem=,rss=,comm= --sort=-pcpu 2>/dev/null | head -n 80
-echo @@USERS; getconf CLK_TCK 2>/dev/null || echo 100; getconf PAGESIZE 2>/dev/null || echo 4096
-{ awk -F: '{print "P", $3, $1}' /etc/passwd 2>/dev/null; stat -c 'U %u %n' /proc/[0-9]* 2>/dev/null; awk '{l=$0; sub(/^[^)]*\) /,"",l); split(l,f," "); p=FILENAME; sub(/\/stat$/,"",p); print "S", p, f[12]+f[13], f[22]}' /proc/[0-9]*/stat 2>/dev/null; } | awk '$1=="P"{nm[$2]=$3; next} $1=="U"{u[$3]=$2; next} $1=="S"{k=($2 in u)? u[$2] : "?"; c[k]+=$3; m[k]+=$4; n[k]++} END{for(k in c){name=(k in nm)?nm[k]:k; print name, c[k], m[k], n[k]}}'
+echo @@PROCESSES
+getconf CLK_TCK 2>/dev/null || echo 100
+cat /proc/uptime 2>/dev/null || echo unknown
+ps -e -o pid=,uid=,rss=,user:128=,comm= 2>/dev/null | awk -v probe="$$" '
+  $1 ~ /^[0-9]+$/ && $1 != probe {
+    path="/proc/" $1 "/stat"
+    ok=(getline line < path); close(path)
+    if (ok != 1 || !sub(/^.*\) /,"",line)) next
+    if (split(line,f," ") < 22) next
+    # After the last ") ", fields 12/13 are CPU ticks and field 20 is process start time.
+    comm=$0; for (i=1; i<=4; i++) sub(/^[[:space:]]*[^[:space:]]+[[:space:]]*/, "", comm)
+    printf "%s\t%s\t%s\t%.0f\t%s\t%s\t%s\n", $1, $2, f[20], f[12]+f[13], $3, $4, comm
+  }'
 echo @@TCP; cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | awk '$4=="01"{n++} END{print n+0}'
 echo @@GPU; command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit,fan.speed,clocks.sm,utilization.memory --format=csv,noheader,nounits 2>/dev/null
 echo @@AMD; for d in /sys/class/drm/card*/device; do [ -r "$d/gpu_busy_percent" ] && echo "$(basename "$(dirname "$d")") $(cat "$d/gpu_busy_percent") $(cat "$d/mem_info_vram_used" 2>/dev/null || echo 0) $(cat "$d/mem_info_vram_total" 2>/dev/null || echo 0)"; done
@@ -36,9 +47,65 @@ pub struct Raw {
     pub cpu: HashMap<String, Vec<u64>>,
     pub net: HashMap<String, (u64, u64)>,
     pub io: HashMap<String, (u64, u64)>,
-    /// cumulative CPU ticks per user, for the per-user CPU rate
-    pub users: HashMap<String, u64>,
-    pub users_at: f64,
+    /// Share the previous detailed sample across lightweight host polls.
+    processes: Arc<HashMap<i64, ProcessCounter>>,
+    processes_at: f64,
+    processes_uptime: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ProcessCounter {
+    uid: u32,
+    start: u64,
+    ticks: u64,
+}
+
+const PROCESS_LIMIT: usize = 80;
+
+fn sample_processes(lines: &[&str], s: &mut Snapshot, prev: Option<&Raw>) -> (Arc<HashMap<i64, ProcessCounter>>, f64, Option<f64>) {
+    let clk: f64 = lines.first().and_then(|x| x.trim().parse().ok()).filter(|v: &f64| *v > 0.0 && v.is_finite()).unwrap_or(100.0);
+    let uptime: Option<f64> = lines.get(1).and_then(|x| x.split_whitespace().next()).and_then(|x| x.parse().ok());
+    let at = uptime.unwrap_or(s.time);
+    let base = prev.filter(|p| !p.processes.is_empty() && p.processes_uptime.is_some() == uptime.is_some() && at > p.processes_at);
+    let dt = base.map_or(0.0, |p| at - p.processes_at);
+    let cores = s.cores.max(1) as f64;
+    let mut processes = HashMap::new();
+    let mut users: HashMap<&str, UserUse> = HashMap::new();
+    for line in lines.iter().skip(2) {
+        let fields: Vec<&str> = line.splitn(7, '\t').collect();
+        let [pid, uid, start, ticks, rss, name, command] = fields.as_slice() else { continue };
+        let (Ok(pid), Ok(uid), Ok(start), Ok(ticks), Ok(rss)) = (
+            pid.parse::<i64>(), uid.parse::<u32>(), start.parse::<u64>(), ticks.parse::<u64>(), rss.parse::<u64>(),
+        ) else { continue };
+        if processes.insert(pid, ProcessCounter { uid, start, ticks }).is_some() { continue; }
+        let delta = base.map_or(0, |p| match p.processes.get(&pid) {
+            Some(old) if old.start == start && old.uid == uid => ticks.saturating_sub(old.ticks),
+            // A process born inside this window contributes its lifetime ticks so far.
+            _ if p.processes_uptime.is_some_and(|before| start as f64 / clk >= before) => ticks,
+            _ => 0,
+        });
+        let core_used = if dt > 0.0 { delta as f64 / clk / dt } else { 0.0 };
+        let rss = rss as f64 * 1024.0;
+        let user = users.entry(*name).or_insert_with(|| UserUse { user: name.to_string(), ..Default::default() });
+        user.cores += core_used;
+        user.rss += rss;
+        user.procs += 1;
+        s.procs.push(ProcRow {
+            pid, user: name.to_string(), command: command.to_string(), cpu: core_used * 100.0,
+            mem: if s.mem_total > 0.0 { rss / s.mem_total * 100.0 } else { 0.0 }, rss,
+        });
+    }
+    s.process_cpu_ready = base.is_some() && !processes.is_empty();
+    s.users = users.into_values().map(|mut u| { u.cpu = (u.cores / cores * 100.0).min(100.0); u }).collect();
+    s.users.sort_by(|a, b| b.cores.total_cmp(&a.cores).then(b.rss.total_cmp(&a.rss)).then(a.user.cmp(&b.user)));
+
+    // Retain the leaders for both UI sort modes, not just the CPU leaders.
+    s.procs.sort_by(|a, b| b.rss.total_cmp(&a.rss).then(a.pid.cmp(&b.pid)));
+    let memory_top: std::collections::HashSet<i64> = s.procs.iter().take(PROCESS_LIMIT).map(|p| p.pid).collect();
+    s.procs.sort_by(|a, b| b.cpu.total_cmp(&a.cpu).then(b.rss.total_cmp(&a.rss)).then(a.pid.cmp(&b.pid)));
+    let mut rank = 0;
+    s.procs.retain(|p| { rank += 1; rank <= PROCESS_LIMIT || memory_top.contains(&p.pid) });
+    (Arc::new(processes), at, uptime)
 }
 
 pub fn now() -> f64 {
@@ -119,6 +186,7 @@ pub fn build(out: &str, prev: Option<&Raw>) -> Option<(Snapshot, Raw)> {
     if let Some((c, w)) = busy("cpu") { s.cpu = c; s.iowait = w; }
     let mut cores: Vec<&String> = cpu.keys().filter(|k| k.len() > 3 && k.starts_with("cpu")).collect();
     cores.sort_by_key(|k| k[3..].parse::<i64>().unwrap_or(0));
+    if !cores.is_empty() { s.cores = cores.len() as i64; }
     s.per_core = cores.iter().map(|k| busy(k).map(|x| x.0).unwrap_or(0.0)).collect();
 
     // Memory
@@ -201,52 +269,11 @@ pub fn build(out: &str, prev: Option<&Raw>) -> Option<(Snapshot, Raw)> {
         }
     }
 
-    // Processes
-    for line in get("PS") {
-        let f = ws(line);
-        if f.len() < 6 { continue; }
-        let Ok(pid) = f[0].parse() else { continue };
-        s.procs.push(ProcRow {
-            pid,
-            user: f[1].to_string(),
-            cpu: f[2].parse().unwrap_or(0.0),
-            mem: f[3].parse().unwrap_or(0.0),
-            rss: f[4].parse::<f64>().unwrap_or(0.0) * 1024.0,
-            command: f[5..].join(" "),
-        });
-    }
-    // Users: CPU from the change in their processes' cumulative ticks since the last sample, memory from RSS pages
-    let mut users_raw = HashMap::new();
-    let users_at;
-    if full {
-        let u = get("USERS");
-        users_at = uptime.unwrap_or(t);
-        let users_dt = prev.filter(|p| p.uptime.is_some() == uptime.is_some()).map_or(0.0, |p| users_at - p.users_at);
-        let clk: f64 = u.first().and_then(|x| x.trim().parse().ok()).filter(|v: &f64| *v > 0.0).unwrap_or(100.0);
-        let page: f64 = u.get(1).and_then(|x| x.trim().parse().ok()).filter(|v: &f64| *v > 0.0).unwrap_or(4096.0);
-        let cores = (s.cores.max(1)) as f64;
-        for line in u.iter().skip(2) {
-            let f = ws(line);
-            if f.len() < 4 { continue; }
-            let (Ok(ticks), Ok(pages), Ok(n)) = (f[1].parse::<u64>(), f[2].parse::<f64>(), f[3].parse::<i64>()) else { continue };
-            let name = f[0].to_string();
-            let mut core_used = 0.0;
-            if let Some(p) = prev {
-                if users_dt > 0.0 {
-                    if let Some(&pt) = p.users.get(&name) {
-                        // a process that exited takes its ticks with it: never report negative use
-                        core_used = (ticks.saturating_sub(pt) as f64 / clk / users_dt).max(0.0);
-                    }
-                }
-            }
-            users_raw.insert(name.clone(), ticks);
-            s.users.push(UserUse { user: name, cores: core_used, cpu: (core_used / cores * 100.0).min(100.0), rss: pages * page, procs: n });
-        }
-        s.users.sort_by(|a, b| b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal).then(b.rss.partial_cmp(&a.rss).unwrap_or(std::cmp::Ordering::Equal)));
+    let (processes, processes_at, processes_uptime) = if full {
+        sample_processes(&get("PROCESSES"), &mut s, prev)
     } else {
-        users_raw = prev.map(|p| p.users.clone()).unwrap_or_default();
-        users_at = prev.map_or(0.0, |p| p.users_at);
-    }
+        prev.map(|p| (p.processes.clone(), p.processes_at, p.processes_uptime)).unwrap_or_default()
+    };
     s.tcp = get("TCP").first().and_then(|x| x.trim().parse().ok()).unwrap_or(0);
 
     // GPUs
@@ -284,5 +311,54 @@ pub fn build(out: &str, prev: Option<&Raw>) -> Option<(Snapshot, Raw)> {
     }
     s.has_docker = get("DOCKER").iter().any(|l| l.trim() == "yes");
 
-    Some((s, Raw { time: t, uptime, cpu, net, io, users: users_raw, users_at }))
+    Some((s, Raw { time: t, uptime, cpu, net, io, processes, processes_at, processes_uptime }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn poll(uptime: u64, procs: Option<&str>, prev: Option<&Raw>) -> (Snapshot, Raw) {
+        let mut out = format!("@@NPROC\n4\n@@UPTIME\n{uptime}.0 0.0\n@@STAT\ncpu 100 0 200 600 50 0 0 0\n@@MEM\nMemTotal: 102400 kB\n");
+        if let Some(procs) = procs {
+            out.push_str(&format!("@@DF\n@@PROCESSES\n100\n{uptime}.0 0.0\n{procs}\n"));
+        }
+        out.push_str("@@END\n");
+        build(&out, prev).unwrap()
+    }
+
+    #[test]
+    fn process_exit_and_pid_reuse_do_not_hide_other_cpu_use() {
+        let (first, before) = poll(100, Some(concat!(
+            "11\t1000\t3200\t900\t512\talice\tlong (worker)\n",
+            "12\t1000\t4500\t4500\t1024\talice\tsoon-exited\n",
+            "13\t1001\t1300\t600\t768\tbob\told-pid",
+        )), None);
+        assert!(!first.process_cpu_ready);
+        let (_, quick) = poll(101, None, Some(&before));
+        assert!(Arc::ptr_eq(&before.processes, &quick.processes));
+        let (after, _) = poll(103, Some(concat!(
+            "11\t1000\t3200\t1050\t2048\talice\tlong (worker)\n",
+            "13\t1001\t10100\t75\t768\tbob\tnew-pid\n",
+            "14\t1000\t9000\t550\t1024\talice\tpreviously-unseen",
+        )), Some(&quick));
+        assert!(after.process_cpu_ready);
+        let alice = after.users.iter().find(|u| u.user == "alice").unwrap();
+        assert_eq!((alice.cores, alice.cpu, alice.rss, alice.procs), (0.5, 12.5, 3_145_728.0, 2));
+        assert_eq!(after.procs.iter().find(|p| p.pid == 11).unwrap().command, "long (worker)");
+        assert_eq!(after.procs.iter().find(|p| p.pid == 13).unwrap().cpu, 25.0);
+        assert_eq!(after.procs.iter().find(|p| p.pid == 14).unwrap().cpu, 0.0);
+        assert!(!poll(1, Some("11\t1000\t10\t5\t512\talice\tnew-boot"), Some(&quick)).0.process_cpu_ready);
+    }
+
+    #[test]
+    fn keeps_memory_leaders_outside_the_top_cpu_pids() {
+        let processes = (1..=100).map(|pid| format!("{pid}\t1000\t1000\t0\t{pid}\talice\tworker")).collect::<Vec<_>>().join("\n");
+        let (_, before) = poll(100, Some(&processes), None);
+        let processes = (1..=100).map(|pid| format!("{pid}\t1000\t1000\t{}\t{pid}\talice\tworker", 100 - pid)).collect::<Vec<_>>().join("\n");
+        let (after, _) = poll(102, Some(&processes), Some(&before));
+        assert_eq!(after.procs.first().unwrap().pid, 1);
+        assert!(after.procs.iter().any(|p| p.pid == 100));
+        assert_eq!(after.users[0].procs, 100);
+    }
 }

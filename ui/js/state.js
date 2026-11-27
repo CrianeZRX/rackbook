@@ -160,5 +160,5 @@ function record(id, snap) {
     push(h.temp, g.temp ?? 0);
     push(h.power, g.power ?? 0);
   }
-  if (snap.users) push(e.users, Object.fromEntries(snap.users.map((u) => [u.user, u.cores])));
+  if (snap.users && snap.processCpuReady !== false) push(e.users, Object.fromEntries(snap.users.map((u) => [u.user, u.cores])));
 }

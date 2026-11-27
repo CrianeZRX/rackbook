@@ -1,8 +1,8 @@
 import { invoke } from '../api.js';
 import { say, server, liveOf, privilege, canSudo, isCaptain, roleName, privDetail, active } from '../state.js';
-import { card, btn, badge, delegate, confirm, modal, titleBlock } from '../ui.js';
-import { date, esc, shq } from '../fmt.js';
-import { CREW_STATUS, INACTIVE_DAYS, readCrew } from '../crew-status.js';
+import { card, btn, badge, delegate, confirm, modal, prompt, titleBlock } from '../ui.js';
+import { bytes, date, esc, shq } from '../fmt.js';
+import { CREW_STATUS, INACTIVE_DAYS, readCrew, readCrewDisk } from '../crew-status.js';
 import { crewPortrait, drawCrewCabin } from '../rockets.js';
 
 const SCALES = [75, 100, 125, 150];
@@ -14,6 +14,7 @@ const inactiveTag = '<strong class="crew-inactive">长期不活跃</strong>';
 export function mount(el, { id, editServer }) {
   let roster = null, loading = false, error = '', request = 0, context, destroyed = false;
   let zoom = 1, query = '', status = '';
+  let disk = null, scanning = false, diskError = '', diskRequest = 0, mutating = false;
   el.innerHTML = `<div class="page crew-page">
     <div class="card sk crew-roster">
       <div class="head"><span class="kicker">Crew manifest</span><span class="h">舰上的船员（服务器账户）</span></div>
@@ -28,22 +29,67 @@ export function mount(el, { id, editServer }) {
           ${btn('+', { act: 'zoom', cls: 'chip', data: 'data-step="1" aria-label="放大船员卡片"' })}
         </div>
         ${btn('↻ 读取', { act: 'load', cls: 'chip' })}
+        ${btn('＋ 新建服务器用户', { act: 'create', cls: 'chip' })}
       </div>
       <div id="crew-notice" class="muted small" role="status"></div>
       <div id="crew-groups" class="col"></div>
       <div class="foot crew-notes">没有运行进程的船员显示为离线。离线且上次登录已满 ${INACTIVE_DAYS} 天，会标为长期不活跃。</div>
     </div>
-    <aside id="accts"></aside>
+    <aside class="col crew-sidebar">
+      <section class="card sk crew-disk">
+        <div class="head"><span class="kicker">Disk usage</span><span class="h">船员磁盘用量</span></div>
+        <div class="muted small">按文件所属 UID 统计受支持的本地磁盘用量，包括主目录以外的文件。不含网络盘和内存盘。</div>
+        <div class="row">${btn('统计用量', { act: 'scan', cls: 'chip' })}</div>
+        <div id="crew-disk-status" class="muted small" role="status"></div>
+        <div id="crew-disk-list"></div>
+      </section>
+      <div id="accts"></div>
+    </aside>
   </div>`;
   const find = (selector) => el.querySelector(selector);
   const groups = find('#crew-groups');
   const notice = find('#crew-notice');
   const loadButton = find('[data-act="load"]');
+  const createButton = find('[data-act="create"]');
+  const scanButton = find('[data-act="scan"]');
+  const diskStatus = find('#crew-disk-status');
+  const diskList = find('#crew-disk-list');
   const accountPanel = find('#accts');
   const cabinResize = new ResizeObserver((entries) => {
     for (const { target } of entries) drawCrewCabin(target, target.dataset.cabin === 'command');
   });
-  let groupHtml, accountHtml;
+  let groupHtml, accountHtml, diskHtml;
+
+  const diskBytes = (u) => disk?.users.get(u.name) === u.uid ? disk?.bytes.get(u.uid) : undefined;
+  const diskText = (n) => n == null ? '未统计' : (disk.partial ? '≥ ' : '') + bytes(n);
+  const renderDisk = () => {
+    const online = liveOf(id).phase === 'online';
+    scanButton.disabled = !online || !roster?.users.length || scanning || mutating;
+    const message = scanning ? '正在扫描本地磁盘…' : diskError ? '没统计到：' + diskError
+      : disk ? `${date(disk.scannedAt.getTime() / 1000)} · ${disk.partial ? '部分可读，结果仅为下限' : '已扫描'}`
+      : !online ? '接通后可统计' : '按需扫描，不随页面自动刷新。';
+    if (diskStatus.textContent !== message) diskStatus.textContent = message;
+    const table = disk ? `<table class="sheet"><thead><tr><th scope="col">用户</th><th scope="col" class="r">用量</th></tr></thead><tbody>
+      ${(roster?.users || []).slice().sort((a, b) => (diskBytes(b) ?? -1) - (diskBytes(a) ?? -1) || a.name.localeCompare(b.name)).map((u) =>
+        `<tr><td class="name" title="${esc(u.name)}" data-notr>${esc(u.name)}</td><td class="r mono crew-disk-bytes">${diskText(diskBytes(u))}</td></tr>`).join('')}
+      </tbody></table>` : '';
+    if (table !== diskHtml) diskList.innerHTML = diskHtml = table;
+  };
+
+  const resetDisk = () => { ++diskRequest; disk = null; scanning = false; diskError = ''; renderDisk(); };
+  const scan = async () => {
+    if (scanButton.disabled) return;
+    const token = ++diskRequest, users = roster.users;
+    scanning = true; diskError = ''; renderDisk();
+    try {
+      const result = await readCrewDisk(id, users, canSudo(privilege(id)));
+      if (!destroyed && token === diskRequest) disk = { ...result, users: new Map(users.map((u) => [u.name, u.uid])) };
+    } catch (e) {
+      if (!destroyed && token === diskRequest) diskError = e.message || String(e);
+    } finally {
+      if (!destroyed && token === diskRequest) { scanning = false; renderDisk(); }
+    }
+  };
 
   const setZoom = () => {
     const scale = SCALES[zoom] / 100;
@@ -65,7 +111,8 @@ export function mount(el, { id, editServer }) {
   };
 
   const renderRoster = () => {
-    const users = (roster?.users || []).map((u) => u.name === roster.login && isCaptain(privilege(id)) ? { ...u, captain: true } : u);
+    const power = privilege(id);
+    const users = (roster?.users || []).map((u) => u.name === roster.login && isCaptain(power) ? { ...u, captain: true } : u);
     const shown = users.filter((u) => (!status || u.status === status || (status === 'offline' && u.status === 'inactive')) && u.name.toLowerCase().includes(query));
     const sorted = (list) => list.sort((a, b) => Number(b.name === roster.login) - Number(a.name === roster.login)
       || STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status) || a.uid - b.uid);
@@ -86,6 +133,9 @@ export function mount(el, { id, editServer }) {
     }
     const online = liveOf(id).phase === 'online';
     loadButton.disabled = !online || loading;
+    createButton.hidden = !isCaptain(power);
+    createButton.disabled = !online || !canSudo(power) || mutating;
+    createButton.title = power === 'needsPassword' ? '先在登舰账户里存 sudo 密码' : '';
     const message = loading && !roster ? '读取中…'
       : !online ? '接通以后才能读取船员名单。'
       : error || (!roster ? '点「读取」列出船员。' : !shown.length ? '没有符合条件的船员。' : '');
@@ -94,6 +144,7 @@ export function mount(el, { id, editServer }) {
       notice.dataset.message = message;
     }
     notice.hidden = !message;
+    renderDisk();
     return users;
   };
 
@@ -139,15 +190,56 @@ export function mount(el, { id, editServer }) {
 
   const update = () => {
     const online = liveOf(id).phase === 'online';
-    const next = online ? active(server(id))?.id || '' : null;
+    const cfg = server(id), account = active(cfg);
+    const next = online ? JSON.stringify([cfg?.host, cfg?.port, account?.id, account?.user]) : null;
     if (context !== next) {
       context = next;
       ++request;
       roster = null; loading = false; error = '';
+      resetDisk();
       if (online) load();
     }
     renderAccounts();
     renderRoster();
+  };
+
+  const canRemove = (user) => user && !mutating && canSudo(privilege(id)) && user.uid >= 1000 && user.uid < 65534 &&
+    user.name !== roster?.login && !server(id)?.accounts.some((a) => a.user.trim() === user.name);
+
+  const manage = async (user, uid, accountAtOpen) => {
+    const cfg = server(id), account = active(cfg);
+    if (!account || !context || context !== accountAtOpen || destroyed || mutating || !canSudo(privilege(id))) return;
+    mutating = true; renderRoster();
+    try {
+      const r = await invoke('change_crew_account', { id, account: account.id, host: cfg.host, port: cfg.port, user, removeUid: uid });
+      if (r.code !== 0) throw new Error(r.err.trim() || `退出码 ${r.code}`);
+      say(uid == null ? `已新建服务器用户 ${user}。登录凭据需另行配置。` : `已删除服务器用户 ${user}，保留其文件。`, 'ok');
+      if (!destroyed && context === accountAtOpen) {
+        resetDisk(); loading = false; load();
+      }
+    } catch (e) {
+      say('没成功：' + (e.message || String(e)), 'refuse');
+    } finally {
+      mutating = false;
+      if (!destroyed) renderRoster();
+    }
+  };
+
+  const create = async () => {
+    const accountAtOpen = context;
+    const user = (await prompt('新建服务器用户', '创建 Linux 账户和主目录，不自动配置密码、SSH 登录或 sudo 权限。', '', '新建'))?.trim();
+    if (!user) return;
+    if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(user) || user === 'root') {
+      say('请使用最多 32 个字符的小写 Linux 用户名，以字母或下划线开头。', 'refuse'); return;
+    }
+    await manage(user, null, accountAtOpen);
+  };
+
+  const remove = async (user, accountAtOpen) => {
+    if (destroyed || context !== accountAtOpen || !canRemove(user)) return;
+    if (!await confirm(`删除服务器用户 ${user.name}？`, '只删除 Linux 账户，保留主目录和其他文件。用户仍有运行进程时不会强制删除。', '删除用户')) return;
+    if (!canRemove(user) || !roster?.users.some((u) => u.name === user.name && u.uid === user.uid)) return;
+    await manage(user.name, user.uid, accountAtOpen);
   };
 
   const showMember = async (button) => {
@@ -160,28 +252,30 @@ export function mount(el, { id, editServer }) {
       (user.captain ? action('降为领航员', 'demote', true) : action('升为舰长', 'promote')) +
       (user.docker ? action('移出货舱', 'undock') : action('进入货舱', 'dock'));
     const accountAtOpen = context;
-    await modal(`${titleBlock('Crew manifest', user.name, '', true)}
+    const result = await modal(`${titleBlock('Crew manifest', user.name, '', true)}
       <div class="crew-profile">
         <img class="crew-portrait" src="${crewPortrait(user.status, user.captain)}" alt="">
         <div class="col">
           <div class="row"><span class="badge ${user.captain ? 'cap' : 'nav'}">${user.captain ? '★' : '✦'} ${role}</span>${user.name === roster.login ? currentTag : ''}</div>
           <div class="row">${statusTag(user.status)}${user.status === 'inactive' ? inactiveTag : ''}</div>
           ${user.count != null ? `<div class="muted small">运行进程 ${user.count}</div>` : ''}
+          <div class="muted small">磁盘用量 <b class="mono">${diskText(diskBytes(user))}</b></div>
           ${user.last > 0 ? `<div class="muted small">最近登录 <span class="mono" data-notr>${date(user.last)}</span></div>` : ''}
           ${user.last === 0 ? '<div class="muted small">无登录记录</div>' : ''}
           <div class="mono small crew-path" data-notr>UID ${user.uid} · ${esc(user.home)} · ${esc(user.shell)}</div>
           <div class="row muted small">${user.docker ? '<span>· 货舱</span>' : ''}${nonLogin ? '<span>· 不能登录</span>' : ''}</div>
         </div>
       </div>
-      <div class="row crew-profile-actions">${actions}<span class="spacer"></span>${btn('关闭', { act: 'close' })}</div>`,
+      <div class="row crew-profile-actions">${actions}${canRemove(user) ? btn('删除用户…', { act: 'remove', cls: 'chip danger' }) : ''}<span class="spacer"></span>${btn('关闭', { act: 'close' })}</div>`,
     { width: 470, onMount: (sheet, close) => {
       sheet.querySelector('[data-act="close"]').focus();
-      delegate(sheet, { close: () => close(), role: (b) => {
+      delegate(sheet, { close: () => close(), remove: () => close('remove'), role: (b) => {
         close();
         if (!destroyed && context === accountAtOpen) changeRole(b);
       } });
     } });
-    if (button.isConnected) button.focus({ preventScroll: true });
+    if (result === 'remove') await remove(user, accountAtOpen);
+    if (button.isConnected && !document.querySelector('.scrim')) button.focus({ preventScroll: true });
   };
 
   find('#crew-query').addEventListener('input', (e) => { query = e.target.value.trim().toLowerCase(); renderRoster(); });
@@ -190,6 +284,8 @@ export function mount(el, { id, editServer }) {
   const labels = { promote: (u) => `把 ${u} 升为舰长（加入 sudo/wheel 组）`, demote: (u) => `把 ${u} 降为领航员（移出 sudo/wheel/admin 组）`, dock: (u) => `让 ${u} 进入货舱（加入 docker 组）`, undock: (u) => `让 ${u} 移出货舱（移出 docker 组）` };
   delegate(el, {
     load: () => load(true),
+    scan,
+    create,
     zoom: (b) => { zoom = Math.max(0, Math.min(SCALES.length - 1, zoom + Number(b.dataset.step))); setZoom(); },
     member: (b) => showMember(b),
     edit: () => editServer(id),

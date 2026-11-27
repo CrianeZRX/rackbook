@@ -291,6 +291,11 @@ async fn sudo(store: S<'_>, id: String, cmd: String, timeout: Option<u64>) -> Re
 }
 
 #[tauri::command]
+async fn change_crew_account(store: S<'_>, id: String, account: String, host: String, port: u16, user: String, remove_uid: Option<u32>) -> Result<RunOut, String> {
+    store.change_crew_account(uid(&id)?, uid(&account)?, &host, port, &user, remove_uid).await
+}
+
+#[tauri::command]
 async fn docker(store: S<'_>, id: String, args: String, timeout: Option<u64>) -> Result<RunOut, String> {
     Ok(store.docker(uid(&id)?, &args, timeout.unwrap_or(60)).await)
 }
@@ -574,7 +579,7 @@ pub fn run_app() {
         })
         .invoke_handler(tauri::generate_handler![
             get_state, scan_configs, term_open, term_write, term_resize, term_close, save_server, delete_server, move_server, connect, disconnect, connect_all, disconnect_all,
-            refresh, switch_account, reprobe, set_sudo_password, test_connection, forget_host_key, run, sudo, docker,
+            refresh, switch_account, reprobe, set_sudo_password, test_connection, forget_host_key, run, sudo, docker, change_crew_account,
             docker_via_sudo, write_file, download, upload, open_terminal, set_prefs, go_background, show_main,
             float_resize, float_drag, reset_float, quit_app
         ])

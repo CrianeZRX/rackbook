@@ -1,4 +1,5 @@
 import { invoke } from './api.js';
+import { shq } from './fmt.js';
 
 // Return only account details, process counts and timestamps. Login hosts and TTYs stay on the server.
 const command = String.raw`export LC_ALL=C TZ=UTC
@@ -32,6 +33,61 @@ export const CREW_STATUS = {
   inactive: '长期不活跃',
   unknown: '状态未知',
 };
+
+// Scan local filesystems once, not once per account. Charge allocated blocks to
+// their owning UID, including files outside the home directory.
+const diskScript = String.raw`export LC_ALL=C
+mounts=$(awk '
+  $5 ~ /^\/(dev|proc|sys|run)(\/|$)/ {next}
+  {
+    for (i=7; i<=NF && $i!="-"; i++) {}
+    if ($(i+1) ~ /^(ext[234]|xfs|btrfs|zfs|f2fs|jfs|reiserfs|bcachefs|nilfs2|ntfs3|ntfs|vfat|exfat|fuseblk)$/ ||
+        ($5=="/" && $(i+1)=="overlay")) {
+      count[$3]++; devices[$5]=$3
+    }
+  }
+  END { for (target in devices) print (count[devices[target]]>1 ? "shared" : "local"), target }
+' /proc/self/mountinfo) || exit 1
+test -n "$mounts" || { echo '没有找到支持的本地磁盘' >&2; exit 1; }
+command -v find >/dev/null || exit 1
+{
+  printf '%s\n' "$mounts" | while read -r kind mount; do
+    # mountinfo encodes spaces, newlines and literal backslashes as octal.
+    target=$(printf '%b.' "$(printf '%s' "$mount" | sed 's/\\/\\0/g')")
+    target=${'${target%.}'}
+    printf 'mount\n'
+    find -P "$target" -xdev -ignore_readdir_race -printf "$kind %D %i %n %U %b\n" 2>/dev/null || printf 'partial\n'
+  done
+} | awk -v wanted="$1" '
+  BEGIN { n=split(wanted,ids,","); for(i=1;i<=n;i++) blocks[ids[i]]=0 }
+  $1=="mount" { mounts++; next }
+  $1=="partial" { partial=1; next }
+  NF==6 {
+    files++
+    if ($5 in blocks && !(($1=="shared" || $4>1) && seen[$2 SUBSEP $3]++)) blocks[$5]+=$6
+  }
+  END {
+    printf "@@DISK\n%s %d\n", partial || !files ? "partial" : "complete", mounts
+    for(uid in blocks) printf "%s %.0f\n",uid,blocks[uid]*512
+  }'
+`;
+
+export async function readCrewDisk(id, users, elevated) {
+  const uids = [...new Set(users.map((u) => u.uid).filter((uid) => Number.isInteger(uid) && uid >= 0))].join(',');
+  if (!uids) throw new Error('没有可统计的账户');
+  const cmd = `timeout -k 5s 90s sh -c ${shq(diskScript)} rackbook ${shq(uids)}`;
+  const { code, out, err } = await invoke(elevated ? 'sudo' : 'run', { id, cmd, timeout: 100 });
+  if (code !== 0) throw new Error(code === 124 || code === 137 ? '磁盘扫描超过 90 秒' : (err.trim() || `扫描失败（${code}）`));
+
+  const [, status, body] = out.match(/(?:^|\n)@@DISK\n(complete|partial) [1-9]\d*\n([\s\S]*)$/) || [];
+  if (!status) throw new Error('未收到有效的磁盘用量');
+  const bytes = new Map();
+  for (const line of body.trim().split('\n')) {
+    const m = line.match(/^(\d+) (\d+)$/);
+    if (m) bytes.set(Number(m[1]), Number(m[2]));
+  }
+  return { bytes, partial: status === 'partial' || !elevated, scannedAt: new Date() };
+}
 
 export async function readCrew(id) {
   const { code, out, err } = await invoke('run', { id, cmd: command, timeout: 20 });

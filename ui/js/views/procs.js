@@ -1,14 +1,14 @@
 import { invoke } from '../api.js';
 import { say, liveOf, server, privilege, canSudo, roleName, active, isCaptain } from '../state.js';
-import { card, btn, delegate, confirm, bar, textSheet } from '../ui.js';
+import { btn, delegate, confirm, bar, textSheet } from '../ui.js';
 import { C, WASHES, wash, loadColor, sketchAll } from '../kit.js';
-import { orbitScene, userStream } from '../rockets.js';
+import { newOrbit, orbitScene, ORBIT_LIMIT, userStream } from '../rockets.js';
 import { ext } from '../state.js';
 import * as F from '../fmt.js';
 import { esc, shq } from '../fmt.js';
 
 export function mount(el, { id, openCrew }) {
-  let sortMem = false, query = '', svcQuery = '', services = null, loading = false;
+  let sortMem = false, query = '', svcQuery = '', services = null, loading = false, svcError = '';
   el.innerHTML = `<div class="page" style="padding-top:18px;flex:1;min-height:0">
     <div class="card sk">
       <div class="head row" style="flex-wrap:wrap"><span class="kicker">Crew in orbit</span><span class="h">谁在用这艘船</span><span class="spacer"></span>${btn('查看船员名单', { act: 'crew', cls: 'chip' })}</div>
@@ -29,7 +29,7 @@ export function mount(el, { id, openCrew }) {
         <div class="head"><span class="kicker">Processes</span><span class="h" id="pTitle"></span></div>
         <div class="row"><input class="field sk" id="pq" placeholder="筛选命令、用户或 PID…"><span id="sortBtns" class="row"></span></div>
         <div style="overflow:auto;flex:1;min-height:300px" id="plist"></div>
-        <div class="foot">列表随每次采样刷新，显示占用最高的 80 个进程（ps 的 %CPU 是进程生命周期内的平均值）。</div>
+        <div class="foot">CPU 是最近两次采样间的平均占用，100% 等于用满一核。内存按常驻集（RSS）显示，共享页可能重复计数。</div>
       </div>
       <div class="card sk">
         <div class="head"><span class="kicker">Services</span><span class="h">systemd 服务（运行中）</span></div>
@@ -40,45 +40,75 @@ export function mount(el, { id, openCrew }) {
   el.querySelector('#pq').addEventListener('input', (e) => { query = e.target.value.toLowerCase(); renderProcs(); });
   el.querySelector('#sq').addEventListener('input', (e) => { svcQuery = e.target.value.toLowerCase(); renderSvcs(); });
 
+  let procKey, priorSort;
   const renderProcs = () => {
     const l = liveOf(id);
-    let rows = (l.snap?.procs || []).slice();
-    if (sortMem) rows.sort((a, b) => b.rss - a.rss);
+    const snap = l.phase === 'online' ? l.snap : null;
+    const ready = snap?.processCpuReady !== false;
+    const key = JSON.stringify([snap?.detailsTime ?? snap?.time, sortMem, query]);
+    if (procKey === key) return;
+    procKey = key;
+    let rows = (snap?.procs || []).slice();
+    if (sortMem) rows.sort((a, b) => b.rss - a.rss || a.pid - b.pid);
     if (query) rows = rows.filter((p) => p.command.toLowerCase().includes(query) || p.user.toLowerCase().includes(query) || String(p.pid) === query);
-    el.querySelector('#pTitle').textContent = `进程 · 按${sortMem ? '内存' : ' CPU'}排序`;
-    el.querySelector('#sortBtns').innerHTML = btn('按 CPU', { act: 'sort', cls: 'chip' + (!sortMem ? ' active' : ''), data: 'data-m="0"' }) + btn('按内存', { act: 'sort', cls: 'chip' + (sortMem ? ' active' : ''), data: 'data-m="1"' });
+    else rows = rows.slice(0, 80);
+    if (priorSort !== sortMem) {
+      priorSort = sortMem;
+      el.querySelector('#pTitle').textContent = `进程 · 按${sortMem ? '内存' : ' CPU'}排序`;
+      el.querySelector('#sortBtns').innerHTML = btn('按 CPU', { act: 'sort', cls: 'chip' + (!sortMem ? ' active' : ''), data: 'data-m="0"' }) + btn('按内存', { act: 'sort', cls: 'chip' + (sortMem ? ' active' : ''), data: 'data-m="1"' });
+    }
     el.querySelector('#plist').innerHTML = `<table class="sheet procs"><colgroup><col style="width:86px"><col style="width:96px"><col style="width:150px"><col style="width:90px"><col><col style="width:118px"></colgroup>
       <tr><th>PID</th><th>用户</th><th>CPU %</th><th class="r">内存</th><th>命令</th><th></th></tr>` +
-      rows.map((p) => `<tr class="prow"><td>${p.pid}</td><td class="name" data-notr title="${esc(p.user)}">${esc(p.user)}</td><td><div class="row" style="gap:6px">${bar(Math.min(1, p.cpu / 100), loadColor(Math.min(100, p.cpu)), 7)}<span class="nw" style="width:44px;text-align:right">${F.num(p.cpu, 1)}</span></div></td><td class="r">${F.bytes(p.rss)}</td><td class="hand name" data-notr style="font-size:0.9375rem" title="${esc(p.command)}">${esc(p.command)}</td>
+      rows.map((p) => `<tr class="prow"><td>${p.pid}</td><td class="name" data-notr title="${esc(p.user)}">${esc(p.user)}</td><td><div class="row" style="gap:6px">${bar(ready ? p.cpu / 100 : 0, loadColor(Math.min(100, p.cpu)), 7)}<span class="nw" style="min-width:44px;text-align:right">${ready ? F.num(p.cpu, 1) : '—'}</span></div></td><td class="r">${F.bytes(p.rss)}</td><td class="hand name" data-notr style="font-size:0.9375rem" title="${esc(p.command)}">${esc(p.command)}</td>
         <td class="r nw"><span class="act">${btn('结束', { act: 'kill', cls: 'chip', data: `data-pid="${p.pid}" data-c="${esc(p.command)}" data-u="${esc(p.user)}"` })}${btn('强杀', { act: 'kill9', cls: 'chip danger', data: `data-pid="${p.pid}" data-c="${esc(p.command)}" data-u="${esc(p.user)}"` })}</span></td></tr>`).join('') + '</table>';
     sketchAll(el);
   };
   // ---- crew in orbit: per-user CPU and memory, live ----
   const colourOf = (u) => { let h = 0; for (const ch of u) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return u === 'root' ? C.rose : wash(WASHES[h % WASHES.length]); };
-  let colours = {}, users = [], captains = new Set(), current = '', alive = true, raf = 0;
+  let colours = {}, users = [], captains = new Set(), current = '', alive = true, raf = 0, userKey;
+  const motion = newOrbit();
+  const orbitCanvas = el.querySelector('#orbit'), streamCanvas = el.querySelector('#ustream');
+  const drawUserStream = () => userStream(streamCanvas, ext(id).users, users.map((u) => u.user).sort(), colours, liveOf(id).snap?.cores || 1);
+  const streamResize = new ResizeObserver(drawUserStream);
+  streamResize.observe(streamCanvas);
   const renderUsers = () => {
-    const snap = liveOf(id).snap;
+    const l = liveOf(id), snap = l.phase === 'online' ? l.snap : null;
     const cfg = server(id);
     current = active(cfg)?.user || '';
     captains = new Set(['root', ...(cfg?.accounts || []).filter((a) => isCaptain(a.privilege)).map((a) => a.user)]);
-    users = (snap?.users || []).filter((u) => u.cores > 0.005 || u.rss > 64 * 1048576).slice(0, 10);
-    colours = Object.fromEntries((snap?.users || []).map((u) => [u.user, colourOf(u.user)]));
+    const key = JSON.stringify([snap?.detailsTime ?? snap?.time, current]);
+    if (key === userKey) return;
+    userKey = key;
+    const ready = snap?.processCpuReady !== false;
+    const ranked = snap?.users || [];
+    const previous = new Set(users.map((u) => u.user));
+    const visible = new Set();
+    if (ranked.some((u) => u.user === current)) visible.add(current);
+    // A small rank buffer keeps neighbors from trading places at the cutoff.
+    for (const u of ranked.slice(0, ORBIT_LIMIT + 2)) {
+      if (visible.size < ORBIT_LIMIT && previous.has(u.user)) visible.add(u.user);
+    }
+    for (const u of ranked) {
+      if (visible.size >= ORBIT_LIMIT) break;
+      if (u.cores > 0.005 || u.rss > 64 * 1048576) visible.add(u.user);
+    }
+    users = ranked.filter((u) => visible.has(u.user));
+    colours = Object.fromEntries(users.map((u) => [u.user, colourOf(u.user)]));
     const memT = snap?.memTotal || 1;
     const topCores = Math.max(0.01, ...users.map((u) => u.cores));
     el.querySelector('#ulist').innerHTML = users.length ? `<table class="sheet procs"><colgroup><col style="width:18px"><col><col style="width:120px"><col style="width:120px"><col style="width:52px"></colgroup>
       <tr><th></th><th>用户</th><th>CPU</th><th>内存</th><th class="r">进程</th></tr>` +
       users.map((u) => `<tr><td><span style="display:inline-block;width:12px;height:12px;border:1.2px solid #231e16;border-radius:2px;background:${colours[u.user]}"></span></td><td class="name hand" style="font-size:0.9375rem" title="${esc(u.user === current ? `当前用户 · ${u.user}` : u.user)}">${u.user === current ? '<span class="red" aria-hidden="true">★ </span>' : ''}<span data-notr>${esc(u.user)}</span></td>
-        <td><div class="row" style="gap:6px">${bar(u.cores / topCores, colours[u.user], 7)}<span class="nw" style="width:56px;text-align:right">${u.cores >= 0.995 ? F.num(u.cores, 1) + ' 核' : F.num(u.cpu, 1) + '%'}</span></div></td>
+        <td><div class="row" style="gap:6px">${bar(ready ? u.cores / topCores : 0, colours[u.user], 7)}<span class="nw" style="min-width:56px;text-align:right" title="${ready ? '整机 CPU ' + F.num(u.cpu, 1) + '%' : '等待下一次完整采样'}">${ready ? F.num(u.cores, u.cores < 0.1 ? 2 : 1) + ' 核' : '—'}</span></div></td>
         <td><div class="row" style="gap:6px">${bar(u.rss / memT, C.blue, 7)}<span class="nw" style="width:56px;text-align:right">${F.bytes(u.rss)}</span></div></td><td class="r">${u.procs}</td></tr>`).join('') + '</table>'
-      : '<div class="muted">等第二次采样后才算得出各用户的 CPU。</div>';
-    const order = [...users].reverse().map((u) => u.user);
-    userStream(el.querySelector('#ustream'), ext(id).users, order, colours, snap?.cores || 1);
+      : `<div class="muted">${ready ? '当前没有符合显示条件的用户进程。' : '等第二次完整采样后才算得出各用户的 CPU。'}</div>`;
+    drawUserStream();
   };
   const orbitLoop = (t) => {
     if (!alive) return;
     if (!el.isConnected) { alive = false; return; }
-    orbitScene(el.querySelector('#orbit'), users, colours, t / 1000, {
-      center: (server(id)?.name || 'SERVER').slice(0, 10), current, captains,
+    orbitScene(orbitCanvas, users, colours, t / 1000, {
+      motion, center: (server(id)?.name || 'SERVER').slice(0, 10), current, captains,
     });
     raf = requestAnimationFrame(orbitLoop);
   };
@@ -87,7 +117,7 @@ export function mount(el, { id, openCrew }) {
   const renderSvcs = () => {
     el.querySelector('#loadBtn').innerHTML = btn(loading ? '读取中…' : services ? '重读' : '读取', { act: 'loadSvc', disabled: loading });
     const list = (services || []).filter((s) => !svcQuery || s.name.toLowerCase().includes(svcQuery) || s.desc.toLowerCase().includes(svcQuery));
-    el.querySelector('#slist').innerHTML = !services ? `<div class="muted" style="padding:6px">${loading ? '正在问 systemctl…' : '点「读取」列出正在运行的服务。没有 systemd 的系统会是空的。'}</div>`
+    el.querySelector('#slist').innerHTML = !services?.length ? `<div class="muted" style="padding:6px">${loading ? '正在问 systemctl…' : svcError ? esc(svcError) : services ? '没有正在运行的服务。' : '点「读取」列出正在运行的服务。'}</div>`
       : list.map((s) => `<div class="col" style="gap:3px;padding:6px 2px;border-bottom:1px dashed rgba(127,157,179,.6)">
           <div class="row"><b class="mono grow" style="font-size:0.75rem">${esc(s.name.replace('.service', ''))}</b><span class="okc small">${esc(s.sub)}</span></div>
           <div class="muted small" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.desc)}</div>
@@ -96,11 +126,23 @@ export function mount(el, { id, openCrew }) {
   };
 
   const loadSvc = async () => {
-    loading = true; renderSvcs(); say(`正在读取运行中的 systemd 服务…`);
-    const r = await invoke('run', { id, cmd: 'systemctl list-units --type=service --state=running --no-legend --no-pager --plain 2>/dev/null | head -n 400', timeout: 20 });
-    services = r.out.split('\n').map((l) => l.trim().split(/\s+/)).filter((f) => f.length >= 4).map((f) => ({ name: f[0], sub: f[3], desc: f.slice(4).join(' ') }));
-    loading = false; renderSvcs();
-    say(services.length ? `读到 ${services.length} 个运行中的服务。` : '没读到服务（这艘船可能没有 systemd）。', services.length ? 'ok' : 'warn');
+    if (loading) return;
+    loading = true; svcError = ''; renderSvcs(); say('正在读取运行中的 systemd 服务…');
+    try {
+      const r = await invoke('run', { id, cmd: 'systemctl list-units --type=service --state=running --no-legend --no-pager --plain --full', timeout: 20 });
+      if (r.code !== 0) throw new Error(r.err.trim() || `退出码 ${r.code}`);
+      if (!alive) return;
+      services = r.out.split('\n').map((l) => l.trim().split(/\s+/)).filter((f) => f.length >= 4 && f[0].endsWith('.service')).map((f) => ({ name: f[0], sub: f[3], desc: f.slice(4).join(' ') }));
+      say(`读到 ${services.length} 个运行中的服务。`, 'ok');
+    } catch (e) {
+      if (!alive) return;
+      services = null;
+      svcError = '没读到服务：' + (e.message || String(e));
+      say(svcError, 'warn');
+    } finally {
+      loading = false;
+      if (alive) renderSvcs();
+    }
   };
   const kill = async (b, sig) => {
     const pid = b.dataset.pid;
@@ -139,5 +181,5 @@ export function mount(el, { id, openCrew }) {
     },
   });
   renderProcs(); renderSvcs(); renderUsers();
-  return { update: () => { renderProcs(); renderUsers(); }, destroy() { alive = false; cancelAnimationFrame(raf); } };
+  return { update: () => { renderProcs(); renderUsers(); }, destroy() { alive = false; cancelAnimationFrame(raf); streamResize.disconnect(); } };
 }

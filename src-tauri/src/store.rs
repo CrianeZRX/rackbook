@@ -32,6 +32,13 @@ pub fn shq(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+fn valid_crew_name(user: &str) -> bool {
+    user.len() <= 32 && user.as_bytes().split_first().is_some_and(|(&first, rest)| {
+        (first.is_ascii_lowercase() || first == b'_') &&
+            rest.iter().all(|&b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+    })
+}
+
 pub struct Store {
     pub data_dir: PathBuf,
     pub servers: RwLock<Vec<ServerConfig>>,
@@ -369,24 +376,77 @@ impl Store {
         None
     }
 
-    /// Run with root power the way the active account is allowed to; navigators are refused.
-    pub async fn sudo(&self, id: Uuid, cmd: &str, stdin: Option<&[u8]>, timeout: u64) -> RunOut {
-        let Some(acct) = self.server(id).and_then(|s| s.active().cloned()) else { return RunOut::fail("没有登舰账户") };
+    fn sudo_invocation(&self, acct: &Account, cmd: &str, stdin: Option<&[u8]>) -> Result<(String, Option<Vec<u8>>), String> {
         match acct.privilege {
-            Privilege::Root => self.run(id, cmd, stdin, timeout).await,
-            Privilege::Nopasswd => self.run(id, &format!("sudo -n sh -c {}", shq(cmd)), stdin, timeout).await,
+            Privilege::Root => Ok((cmd.to_owned(), stdin.map(<[u8]>::to_vec))),
+            Privilege::Nopasswd => Ok((format!("sudo -n sh -c {}", shq(cmd)), stdin.map(<[u8]>::to_vec))),
             Privilege::Password => {
-                let Some(pw) = self.sudo_password(&acct) else { return RunOut::fail("凭据管理器里找不到 sudo 密码") };
+                let pw = self.sudo_password(acct).ok_or("凭据管理器里找不到 sudo 密码")?;
                 let mut input = format!("{pw}\n").into_bytes();
                 if let Some(s) = stdin {
                     input.extend_from_slice(s);
                 }
-                self.run(id, &format!("sudo -S -p '' sh -c {}", shq(cmd)), Some(&input), timeout).await
+                Ok((format!("sudo -S -p '' sh -c {}", shq(cmd)), Some(input)))
             }
-            Privilege::NeedsPassword => RunOut::fail(format!("{} 是舰长，但还没存可用的 sudo 密码（在「船员」里补上）", acct.title())),
-            Privilege::None => RunOut::fail(format!("领航员 {} 没有 sudo 权限，这个操作需要舰长", acct.title())),
-            Privilege::Unknown => RunOut::fail(format!("还没查验 {} 的权限", acct.title())),
+            Privilege::NeedsPassword => Err(format!("{} 是舰长，但还没存可用的 sudo 密码（在「船员」里补上）", acct.title())),
+            Privilege::None => Err(format!("领航员 {} 没有 sudo 权限，这个操作需要舰长", acct.title())),
+            Privilege::Unknown => Err(format!("还没查验 {} 的权限", acct.title())),
         }
+    }
+
+    /// Run with root power the way the active account is allowed to; navigators are refused.
+    pub async fn sudo(&self, id: Uuid, cmd: &str, stdin: Option<&[u8]>, timeout: u64) -> RunOut {
+        let Some(acct) = self.server(id).and_then(|s| s.active().cloned()) else { return RunOut::fail("没有登舰账户") };
+        match self.sudo_invocation(&acct, cmd, stdin) {
+            Ok((cmd, input)) => self.run(id, &cmd, input.as_deref(), timeout).await,
+            Err(e) => RunOut::fail(e),
+        }
+    }
+
+    pub async fn change_crew_account(&self, id: Uuid, account: Uuid, host: &str, port: u16, user: &str, remove_uid: Option<u32>) -> Result<RunOut, String> {
+        if !valid_crew_name(user) || user == "root" {
+            return Err("不能管理此用户名。请使用不超过 32 字符的 Linux 用户名。".into());
+        }
+        let cfg = self.server(id).ok_or("这艘舰船已退出舰队")?;
+        let acct = cfg.active().ok_or("没有登舰账户")?;
+        let matches = |s: &ServerConfig| !s.paused && s.host == host && s.port == port &&
+            s.active().is_some_and(|a| a.id == account && a.user == acct.user && a.privilege == acct.privilege);
+        if !matches(&cfg) {
+            return Err("登舰目标已改变，请重新确认".into());
+        }
+        if !acct.privilege.can_sudo() {
+            return Err("需要有可用 sudo 权限的舰长账户".into());
+        }
+        let q = shq(user);
+        let cmd = if let Some(uid) = remove_uid {
+            if !(1000..65534).contains(&uid) || cfg.accounts.iter().any(|a| a.user.trim() == user) {
+                return Err("不能删除系统用户、当前用户或已保存的登舰账户".into());
+            }
+            // Check the local passwd entry again before deleting. Do not remove
+            // files, force removal, or act on a name that has since been reused.
+            format!(r#"uid=$(getent passwd {q} | cut -d: -f3)
+if [ "$uid" != {uid} ] || ! awk -F: '$1 == "{user}" && $3 == {uid} {{ found=1 }} END {{ exit !found }}' /etc/passwd; then
+  echo '本地账户已经变化，请重新读取船员名单' >&2; exit 1
+fi
+sudo_uid=$SUDO_UID
+test "$sudo_uid" != "$uid" || {{ echo '不能删除当前登舰用户' >&2; exit 1; }}
+exec userdel -- {q}"#)
+        } else {
+            format!("if getent passwd {q} >/dev/null; then echo '这个用户已存在' >&2; exit 1; fi\nexec useradd -m -- {q}")
+        };
+        let (cmd, input) = self.sudo_invocation(acct, &cmd, None)?;
+        // Pin mutations to a freshly authenticated connection for the confirmed
+        // SSH target so a background reconnect/account switch cannot reroute it.
+        let ep = Self::endpoint(&cfg)?;
+        let conn = Conn::connect(&ep, self.known.clone()).await.map_err(|e| e.to_string())?;
+        if !self.server(id).is_some_and(|s| matches(&s) &&
+            (remove_uid.is_none() || !s.accounts.iter().any(|a| a.user.trim() == user))) {
+            return Err("登舰目标或账户已改变，请重新确认".into());
+        }
+        let result = conn.exec(&cmd, input.as_deref(), Duration::from_secs(30)).await;
+        conn.close().await;
+        let out = result.map_err(|e| e.to_string())?;
+        Ok(RunOut { out: String::from_utf8_lossy(&out.out).into_owned(), err: String::from_utf8_lossy(&out.err).into_owned(), code: out.code })
     }
 
     pub async fn docker(&self, id: Uuid, args: &str, timeout: u64) -> RunOut {
@@ -524,13 +584,15 @@ impl Store {
                     if let Some(previous) = &l.snap {
                         snap.details_time = previous.details_time;
                         snap.mounts.clone_from(&previous.mounts);
-                        snap.procs.clone_from(&previous.procs);
                         snap.gpus.clone_from(&previous.gpus);
-                        snap.users.clone_from(&previous.users);
                         snap.tcp = previous.tcp;
                         snap.has_docker = previous.has_docker;
                         if snap.uptime < previous.uptime {
                             snap.details_time = 0.0;
+                        } else {
+                            snap.procs.clone_from(&previous.procs);
+                            snap.users.clone_from(&previous.users);
+                            snap.process_cpu_ready = previous.process_cpu_ready;
                         }
                     }
                 }
