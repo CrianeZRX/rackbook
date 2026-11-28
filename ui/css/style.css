@@ -252,6 +252,10 @@ tr.prow:hover .act { opacity: 1; }
 .crew-toolbar select { flex: 0 1 auto; width: auto; max-width: 100%; }
 .crew-toolbar button[hidden] { display: none; }
 .crew-sidebar { min-width: 0; }
+.crew-proxy { gap: 8px; }
+.crew-proxy-tools { display: flex; gap: 8px 12px; flex-wrap: wrap; }
+.crew-proxy-tools label { display: inline-flex; align-items: center; gap: 4px; }
+.crew-proxy-tools input { accent-color: var(--red); }
 .crew-disk { gap: 8px; }
 #crew-disk-list { max-height: 18rem; overflow: auto; }
 #crew-disk-list:empty { display: none; }

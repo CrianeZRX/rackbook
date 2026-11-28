@@ -7,9 +7,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
-use russh::client::{self, KeyboardInteractiveAuthResponse};
+use russh::client::{self, ChannelOpenHandle, KeyboardInteractiveAuthResponse};
 use russh::keys::{load_secret_key, HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
-use russh::{ChannelMsg, Disconnect};
+use russh::{Channel, ChannelMsg, Disconnect};
+
+use crate::vpn_proxy::{self, ProxyRelay, ProxyStatus};
+
+type ProxyRelays = Arc<Mutex<HashMap<u16, Arc<ProxyRelay>>>>;
 
 /// Trust-on-first-use store of host key fingerprints, keyed by "host:port".
 pub struct KnownHosts {
@@ -52,6 +56,7 @@ struct Client {
     known: Arc<KnownHosts>,
     host: String,
     mismatch: Arc<Mutex<Option<String>>>,
+    proxies: ProxyRelays,
 }
 
 impl client::Handler for Client {
@@ -69,6 +74,28 @@ impl client::Handler for Client {
                 Ok(false)
             }
         }
+    }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        _originator_port: u32,
+        reply: ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        if connected_address != "127.0.0.1" || originator_address != "127.0.0.1" {
+            return Ok(());
+        }
+        let relay = u16::try_from(connected_port).ok()
+            .and_then(|port| self.proxies.lock().unwrap().get(&port).cloned());
+        if let Some(relay) = relay {
+            reply.accept().await;
+            tokio::spawn(async move { relay.serve(channel.into_stream()).await });
+        }
+        Ok(())
     }
 }
 
@@ -93,6 +120,15 @@ pub struct ExecOut {
 
 pub struct Conn {
     handle: client::Handle<Client>,
+    target: (String, u16, String),
+    proxies: ProxyRelays,
+    proxy_update: tokio::sync::Mutex<()>,
+}
+
+impl Drop for Conn {
+    fn drop(&mut self) {
+        self.stop_proxies();
+    }
 }
 
 fn default_keys() -> Vec<PathBuf> {
@@ -136,7 +172,8 @@ impl Conn {
         });
         let mismatch = Arc::new(Mutex::new(None));
         let hostkey = format!("{}:{}", ep.host, ep.port);
-        let handler = Client { known, host: hostkey, mismatch: mismatch.clone() };
+        let proxies = ProxyRelays::default();
+        let handler = Client { known, host: hostkey, mismatch: mismatch.clone(), proxies: proxies.clone() };
         let connecting = client::connect(config, (ep.host.as_str(), ep.port), handler);
         let mut handle = match tokio::time::timeout(Duration::from_secs(12), connecting).await {
             Err(_) => bail!("连接超时"),
@@ -211,11 +248,87 @@ impl Conn {
                 Auth::Key { .. } => "认证被拒（检查用户名和私钥）",
             })
         }
-        Ok(Conn { handle })
+        Ok(Conn {
+            handle,
+            target: (ep.host.clone(), ep.port, ep.user.clone()),
+            proxies,
+            proxy_update: tokio::sync::Mutex::new(()),
+        })
     }
 
     pub fn alive(&self) -> bool {
         !self.handle.is_closed()
+    }
+
+    pub(crate) fn matches_target(&self, host: &str, port: u16, user: &str) -> bool {
+        self.target.0 == host && self.target.1 == port && self.target.2 == user
+    }
+
+    pub(crate) fn proxy_matches(&self, local_port: u16, url: &str) -> bool {
+        self.alive() && self.proxies.lock().unwrap().values().any(|relay|
+            relay.local_port == local_port && relay.url() == url)
+    }
+
+    fn stop_proxies(&self) {
+        for (_, relay) in self.proxies.lock().unwrap().drain() {
+            relay.stop();
+        }
+    }
+
+    async fn retire_proxy(&self, port: u16) {
+        if let Some(relay) = self.proxies.lock().unwrap().remove(&port) {
+            relay.stop();
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(3),
+            self.handle.cancel_tcpip_forward("127.0.0.1", u32::from(port))).await;
+    }
+
+    pub(crate) async fn update_user_proxy(&self, local_port: u16, tools: u8) -> Result<ProxyStatus, String> {
+        let _update = self.proxy_update.lock().await;
+        let old = self.proxies.lock().unwrap().values().next().cloned();
+        let mut started = None;
+        let relay = if tools == 0 {
+            None
+        } else if let Some(relay) = old.as_ref().filter(|relay| relay.local_port == local_port) {
+            Some(relay.clone())
+        } else {
+            let upstream = tokio::net::TcpStream::connect(("127.0.0.1", local_port));
+            if !matches!(tokio::time::timeout(Duration::from_secs(3), upstream).await, Ok(Ok(_))) {
+                return Err(format!("本机 127.0.0.1:{local_port} 无法连接，请确认 VPN 的 HTTP / Mixed 代理端口"));
+            }
+            let request = self.handle.tcpip_forward("127.0.0.1", 0);
+            let remote_port = match tokio::time::timeout(Duration::from_secs(8), request).await {
+                Ok(Ok(port)) if port > 0 && port <= u16::MAX.into() => port as u16,
+                Ok(_) => return Err("服务器拒绝 SSH 远程端口转发，请检查 SSH 账户的转发权限".into()),
+                Err(_) => return Err("请求 SSH 远程端口转发超时".into()),
+            };
+            let relay = ProxyRelay::new(local_port, remote_port);
+            self.proxies.lock().unwrap().insert(remote_port, relay.clone());
+            started = Some(remote_port);
+            Some(relay)
+        };
+        let url = relay.as_ref().map(|relay| relay.url()).unwrap_or_default();
+        let script = vpn_proxy::install_script(local_port, tools, &url);
+        let install = self.exec("python3 -", Some(script.as_bytes()), Duration::from_secs(12)).await;
+        match install {
+            Ok(out) if out.code == 0 => {}
+            result => {
+                if let Some(port) = started { self.retire_proxy(port).await; }
+                return Err(match result {
+                    Ok(out) if out.code == 127 => "服务器需要 python3 来更新当前用户的工具配置".into(),
+                    Ok(out) => String::from_utf8_lossy(&out.err).lines().last()
+                        .filter(|line| !line.is_empty() && line.len() < 220)
+                        .unwrap_or("无法写入当前用户的代理配置").to_owned(),
+                    Err(error) => format!("保存当前用户的代理设置失败（{error}）"),
+                });
+            }
+        }
+        if let Some(old) = old {
+            if relay.as_ref().is_none_or(|relay| relay.remote_port != old.remote_port) {
+                self.retire_proxy(old.remote_port).await;
+            }
+        }
+        Ok(ProxyStatus { local_port, tools, connected: relay.is_some() && self.alive() })
     }
 
     pub async fn exec(&self, cmd: &str, stdin: Option<&[u8]>, timeout: Duration) -> Result<ExecOut> {
@@ -296,6 +409,7 @@ impl Conn {
     }
 
     pub async fn close(&self) {
+        self.stop_proxies();
         let _ = self.handle.disconnect(Disconnect::ByApplication, "bye", "en").await;
     }
 }

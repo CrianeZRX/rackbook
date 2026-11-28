@@ -4,6 +4,7 @@ import { card, btn, badge, delegate, confirm, modal, prompt, titleBlock } from '
 import { bytes, date, esc, shq } from '../fmt.js';
 import { CREW_STATUS, INACTIVE_DAYS, readCrew, readCrewDisk } from '../crew-status.js';
 import { crewPortrait, drawCrewCabin } from '../rockets.js';
+import { mountUserProxy } from './crew-proxy.js';
 
 const SCALES = [75, 100, 125, 150];
 const STATUS_ORDER = ['online', 'offline', 'inactive', 'unknown'];
@@ -36,6 +37,7 @@ export function mount(el, { id, editServer }) {
       <div class="foot crew-notes">没有运行进程的船员显示为离线。离线且上次登录已满 ${INACTIVE_DAYS} 天，会标为长期不活跃。</div>
     </div>
     <aside class="col crew-sidebar">
+      <div id="crew-proxy"></div>
       <section class="card sk crew-disk">
         <div class="head"><span class="kicker">Disk usage</span><span class="h">船员磁盘用量</span></div>
         <div class="muted small">按文件所属 UID 统计受支持的本地磁盘用量，包括主目录以外的文件。不含网络盘和内存盘。</div>
@@ -55,6 +57,7 @@ export function mount(el, { id, editServer }) {
   const diskStatus = find('#crew-disk-status');
   const diskList = find('#crew-disk-list');
   const accountPanel = find('#accts');
+  const userProxy = mountUserProxy(find('#crew-proxy'), id);
   const cabinResize = new ResizeObserver((entries) => {
     for (const { target } of entries) drawCrewCabin(target, target.dataset.cabin === 'command');
   });
@@ -189,6 +192,7 @@ export function mount(el, { id, editServer }) {
   };
 
   const update = () => {
+    userProxy.update();
     const online = liveOf(id).phase === 'online';
     const cfg = server(id), account = active(cfg);
     const next = online ? JSON.stringify([cfg?.host, cfg?.port, account?.id, account?.user]) : null;
@@ -320,5 +324,5 @@ export function mount(el, { id, editServer }) {
 
   setZoom(); update();
   const timer = setInterval(load, 30_000);
-  return { update, destroy() { destroyed = true; clearInterval(timer); cabinResize.disconnect(); } };
+  return { update, destroy() { destroyed = true; clearInterval(timer); cabinResize.disconnect(); userProxy.destroy(); } };
 }

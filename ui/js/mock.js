@@ -91,6 +91,7 @@ function emit(ev, payload) { (listeners[ev] || []).forEach((cb) => cb(payload));
 export async function listen(ev, cb) { (listeners[ev] = listeners[ev] || []).push(cb); return () => {}; }
 const say = (text, tone = 'info') => emit('status', { text, tone });
 const sv = (id) => servers.find((s) => s.id === id);
+const userProxies = new Map();
 
 const files = {
   '~/.bashrc': `# ~/.bashrc: executed by bash(1) for non-login shells.\ncase $- in\n    *i*) ;;\n      *) return;;\nesac\n\nexport EDITOR=vim\nexport PATH="$HOME/.local/bin:/usr/local/go/bin:$PATH"\nHISTSIZE=5000\n\nalias ll='ls -alF'\nalias gs='git status'\nalias dps="docker ps --format 'table {{.Names}}\\t{{.Status}}'"\n\nmkcd() {\n    mkdir -p "$1" && cd "$1"\n}\n\n[ -f ~/.bash_aliases ] && . ~/.bash_aliases\nsource /etc/bash_completion\n`,
@@ -183,6 +184,13 @@ export async function invoke(cmd, a) {
     // a navigator outside the docker group: refused, like the real backend
     case 'docker': return navigatorOn(a.id) ? { code: 1, out: '', err: `领航员 ${activeUser(a.id)} 没有 sudo 权限，这个操作需要舰长` } : mockDocker(a.args);
     case 'change_crew_account': return mockChangeCrew(a);
+    case 'get_user_proxy': return userProxies.get(a.account) || { tools: 0, localPort: 0, connected: false };
+    case 'set_user_proxy': {
+      if (sv(a.id).activeAccount !== a.account) throw new Error('当前登舰账户已切换');
+      const status = { tools: a.tools, localPort: a.localPort, connected: !!a.tools };
+      userProxies.set(a.account, status);
+      return status;
+    }
     case 'sudo': case 'run': return mockRun(a.cmd, a.id);
   }
   return null;

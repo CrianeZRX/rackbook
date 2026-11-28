@@ -4,6 +4,7 @@ pub mod model;
 pub mod secrets;
 pub mod ssh;
 pub mod store;
+mod vpn_proxy;
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -261,6 +262,21 @@ fn forget_host_key(store: S, host: String, port: u16) {
 #[tauri::command]
 async fn run(store: S<'_>, id: String, cmd: String, stdin: Option<String>, timeout: Option<u64>) -> Result<RunOut, String> {
     Ok(store.run(uid(&id)?, &cmd, stdin.as_deref().map(|s| s.as_bytes()), timeout.unwrap_or(60)).await)
+}
+
+#[tauri::command]
+async fn get_user_proxy(store: S<'_>, id: String, account: String) -> Result<vpn_proxy::ProxyStatus, String> {
+    let conn = store.proxy_connection(uid(&id)?, uid(&account)?).await?;
+    vpn_proxy::read_status(&conn).await
+}
+
+#[tauri::command]
+async fn set_user_proxy(store: S<'_>, id: String, account: String, local_port: u16, tools: u8) -> Result<vpn_proxy::ProxyStatus, String> {
+    if tools > vpn_proxy::ALL_TOOLS || (tools != 0 && local_port == 0) {
+        return Err("请填写有效的本机 HTTP / Mixed 代理端口和应用选项".into());
+    }
+    let conn = store.proxy_connection(uid(&id)?, uid(&account)?).await?;
+    conn.update_user_proxy(local_port, tools).await
 }
 
 #[tauri::command]
@@ -580,7 +596,7 @@ pub fn run_app() {
         .invoke_handler(tauri::generate_handler![
             get_state, scan_configs, term_open, term_write, term_resize, term_close, save_server, delete_server, move_server, connect, disconnect, connect_all, disconnect_all,
             refresh, switch_account, reprobe, set_sudo_password, test_connection, forget_host_key, run, sudo, docker, change_crew_account,
-            docker_via_sudo, write_file, download, upload, open_terminal, set_prefs, go_background, show_main,
+            docker_via_sudo, write_file, download, upload, open_terminal, set_prefs, go_background, show_main, get_user_proxy, set_user_proxy,
             float_resize, float_drag, reset_float, quit_app
         ])
         .run(tauri::generate_context!())

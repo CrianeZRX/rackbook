@@ -297,6 +297,21 @@ impl Store {
         }
     }
 
+    pub(crate) async fn proxy_connection(&self, id: Uuid, account: Uuid) -> Result<Arc<Conn>, String> {
+        let config = self.server(id).ok_or("这艘舰船已退出舰队")?;
+        let login = config.active().filter(|login| login.id == account).ok_or("当前登舰账户已切换")?;
+        if config.paused { return Err("先接通服务器再管理代理".into()); }
+        let conn = self.conn(id).await?;
+        let matches = self.server(id).is_some_and(|current| {
+            !current.paused && current.host == config.host && current.port == config.port &&
+                current.active().is_some_and(|a| a.id == account && a.user == login.user)
+        });
+        if !matches || !conn.matches_target(config.host.trim(), config.port, login.user.trim()) {
+            return Err("登舰目标已改变，请重新打开代理设置".into());
+        }
+        Ok(conn)
+    }
+
     pub async fn run(&self, id: Uuid, cmd: &str, stdin: Option<&[u8]>, timeout: u64) -> RunOut {
         match self.run_bytes(id, cmd, stdin, timeout).await {
             Ok(o) => RunOut {
