@@ -185,6 +185,7 @@ export async function invoke(cmd, a) {
     case 'docker': return navigatorOn(a.id) ? { code: 1, out: '', err: `领航员 ${activeUser(a.id)} 没有 sudo 权限，这个操作需要舰长` } : mockDocker(a.args);
     case 'change_crew_account': return mockChangeCrew(a);
     case 'get_user_proxy': return userProxies.get(a.account) || { tools: 0, localPort: 0, connected: false };
+    case 'stop_vpn_session': return;
     case 'set_user_proxy': {
       if (sv(a.id).activeAccount !== a.account) throw new Error('当前登舰账户已切换');
       const status = { tools: a.tools, localPort: a.localPort, connected: !!a.tools };

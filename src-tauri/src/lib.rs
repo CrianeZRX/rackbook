@@ -5,6 +5,8 @@ pub mod secrets;
 pub mod ssh;
 pub mod store;
 mod vpn_proxy;
+mod vpn_session;
+mod vpn_udp;
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -280,8 +282,18 @@ async fn set_user_proxy(store: S<'_>, id: String, account: String, local_port: u
 }
 
 #[tauri::command]
-async fn term_open(store: S<'_>, id: String, cols: u32, rows: u32, image: Option<String>) -> Result<String, String> {
-    store.inner().term_open(uid(&id)?, cols, rows, image.as_deref()).await
+async fn term_open(store: S<'_>, id: String, cols: u32, rows: u32, image: Option<String>, vpn_account: Option<String>) -> Result<String, String> {
+    let id = uid(&id)?;
+    match vpn_account {
+        Some(account) => store.inner().term_open_mode(id, cols, rows, image.as_deref(), Some(uid(&account)?)).await,
+        None => store.inner().term_open(id, cols, rows, image.as_deref()).await,
+    }
+}
+
+#[tauri::command]
+async fn stop_vpn_session(store: S<'_>, id: String, account: String) -> Result<(), String> {
+    let conn = store.proxy_connection(uid(&id)?, uid(&account)?).await?;
+    conn.stop_vpn_session().await
 }
 
 #[tauri::command]
@@ -596,7 +608,7 @@ pub fn run_app() {
         .invoke_handler(tauri::generate_handler![
             get_state, scan_configs, term_open, term_write, term_resize, term_close, save_server, delete_server, move_server, connect, disconnect, connect_all, disconnect_all,
             refresh, switch_account, reprobe, set_sudo_password, test_connection, forget_host_key, run, sudo, docker, change_crew_account,
-            docker_via_sudo, write_file, download, upload, open_terminal, set_prefs, go_background, show_main, get_user_proxy, set_user_proxy,
+            docker_via_sudo, write_file, download, upload, open_terminal, set_prefs, go_background, show_main, get_user_proxy, set_user_proxy, stop_vpn_session,
             float_resize, float_drag, reset_float, quit_app
         ])
         .run(tauri::generate_context!())

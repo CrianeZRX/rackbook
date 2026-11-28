@@ -12,8 +12,10 @@ use russh::keys::{load_secret_key, HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCe
 use russh::{Channel, ChannelMsg, Disconnect};
 
 use crate::vpn_proxy::{self, ProxyRelay, ProxyStatus};
+use crate::{vpn_session, vpn_udp};
 
 type ProxyRelays = Arc<Mutex<HashMap<u16, Arc<ProxyRelay>>>>;
+type SessionRelay = Arc<Mutex<Option<(String, Arc<ProxyRelay>)>>>;
 
 /// Trust-on-first-use store of host key fingerprints, keyed by "host:port".
 pub struct KnownHosts {
@@ -57,6 +59,7 @@ struct Client {
     host: String,
     mismatch: Arc<Mutex<Option<String>>>,
     proxies: ProxyRelays,
+    session_relay: SessionRelay,
 }
 
 impl client::Handler for Client {
@@ -97,6 +100,23 @@ impl client::Handler for Client {
         }
         Ok(())
     }
+
+    async fn server_channel_open_forwarded_streamlocal(
+        &mut self,
+        channel: Channel<client::Msg>,
+        socket_path: &str,
+        reply: ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let relay = self.session_relay.lock().unwrap().as_ref()
+            .filter(|(path, _)| path == socket_path)
+            .map(|(_, relay)| relay.clone());
+        if let Some(relay) = relay {
+            reply.accept().await;
+            tokio::spawn(async move { relay.serve(channel.into_stream()).await });
+        }
+        Ok(())
+    }
 }
 
 pub enum Auth {
@@ -123,6 +143,8 @@ pub struct Conn {
     target: (String, u16, String),
     proxies: ProxyRelays,
     proxy_update: tokio::sync::Mutex<()>,
+    session_relay: SessionRelay,
+    session_update: tokio::sync::Mutex<()>,
 }
 
 impl Drop for Conn {
@@ -173,7 +195,8 @@ impl Conn {
         let mismatch = Arc::new(Mutex::new(None));
         let hostkey = format!("{}:{}", ep.host, ep.port);
         let proxies = ProxyRelays::default();
-        let handler = Client { known, host: hostkey, mismatch: mismatch.clone(), proxies: proxies.clone() };
+        let session_relay = SessionRelay::default();
+        let handler = Client { known, host: hostkey, mismatch: mismatch.clone(), proxies: proxies.clone(), session_relay: session_relay.clone() };
         let connecting = client::connect(config, (ep.host.as_str(), ep.port), handler);
         let mut handle = match tokio::time::timeout(Duration::from_secs(12), connecting).await {
             Err(_) => bail!("连接超时"),
@@ -253,6 +276,8 @@ impl Conn {
             target: (ep.host.clone(), ep.port, ep.user.clone()),
             proxies,
             proxy_update: tokio::sync::Mutex::new(()),
+            session_relay,
+            session_update: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -273,6 +298,67 @@ impl Conn {
         for (_, relay) in self.proxies.lock().unwrap().drain() {
             relay.stop();
         }
+        if let Some((_, relay)) = self.session_relay.lock().unwrap().take() {
+            relay.stop();
+        }
+    }
+
+    async fn end_session_relay(&self) {
+        let active = self.session_relay.lock().unwrap().take();
+        if let Some((path, relay)) = active {
+            relay.stop();
+            let _ = tokio::time::timeout(Duration::from_secs(3), self.handle.cancel_streamlocal_forward(path)).await;
+        }
+    }
+
+    async fn vpn_exec(&self, cmd: &str, script: Option<&str>, timeout: u64) -> Result<String, String> {
+        let out = self.exec(cmd, script.map(str::as_bytes), Duration::from_secs(timeout)).await.map_err(|e| e.to_string())?;
+        if out.code != 0 {
+            return Err(String::from_utf8_lossy(&out.err).lines().last()
+                .filter(|line| !line.is_empty() && line.len() < 220)
+                .unwrap_or("服务器端代理会话操作失败").to_owned());
+        }
+        Ok(String::from_utf8_lossy(&out.out).trim().to_owned())
+    }
+
+    pub(crate) async fn ensure_vpn_session(&self) -> Result<String, String> {
+        let _update = self.session_update.lock().await;
+        let status = vpn_proxy::read_status(self).await?;
+        if status.local_port == 0 {
+            return Err("请先在「船员 · 权限」中设置本机 HTTP / Mixed 代理端口".into());
+        }
+        let reusable = self.session_relay.lock().unwrap().as_ref()
+            .is_some_and(|(_, relay)| relay.local_port == status.local_port);
+        if reusable && self.vpn_exec(&vpn_session::command("status"), None, 5).await
+            .is_ok_and(|out| out == r#"{"active": true}"#) {
+            return Ok(vpn_session::command("shell"));
+        }
+        if !vpn_udp::supported(status.local_port).await {
+            return Err("代理终端需要本机 Mixed 端口同时支持 HTTP 和 SOCKS5 UDP（UDP ASSOCIATE 握手失败）".into());
+        }
+        self.end_session_relay().await;
+        let socket = self.vpn_exec(&vpn_session::install_command(), Some(vpn_session::SCRIPT), 15).await?;
+        if !socket.starts_with('/') || !socket.ends_with("/vpn-session/s") || socket.contains('\n') {
+            return Err("服务器返回了无效的代理会话套接字路径".into());
+        }
+        let tunnel = self.handle.streamlocal_forward(socket.clone());
+        if !matches!(tokio::time::timeout(Duration::from_secs(8), tunnel).await, Ok(Ok(()))) {
+            return Err("无法建立 SSH 私有套接字转发，请检查服务器是否允许 StreamLocal 转发".into());
+        }
+        *self.session_relay.lock().unwrap() = Some((socket, ProxyRelay::private_session(status.local_port)));
+        let start = format!("start {}", uuid::Uuid::new_v4().simple());
+        if let Err(error) = self.vpn_exec(&vpn_session::command(&start), None, 110).await {
+            self.end_session_relay().await;
+            return Err(error);
+        }
+        Ok(vpn_session::command("shell"))
+    }
+
+    pub(crate) async fn stop_vpn_session(&self) -> Result<(), String> {
+        let _update = self.session_update.lock().await;
+        self.vpn_exec(&vpn_session::command("stop"), None, 10).await?;
+        self.end_session_relay().await;
+        Ok(())
     }
 
     async fn retire_proxy(&self, port: u16) {

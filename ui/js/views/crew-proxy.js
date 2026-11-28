@@ -20,6 +20,7 @@ export function mountUserProxy(el, id) {
     <details class="muted small"><summary>生效范围</summary>
       <p>当前 SSH 用户在任意终端重新运行应用即生效。Git 适用于 HTTP(S) 远程仓库。</p>
       <p>应用通过 Rackbook 的 SSH 隧道连接本机代理。关闭开关会恢复该工具此前的用户配置。</p>
+      <p>需要让其他命令和后台任务共用代理时，打开「终端 → 代理终端」。代理终端中的程序统一使用隔离网络。</p>
     </details>
   </section>`;
 
@@ -42,8 +43,10 @@ export function mountUserProxy(el, id) {
       toggle.disabled = !status || pending;
     }
     const retry = !status && !!error;
-    reconnect.disabled = !account || pending || (!retry && (!mask || !port() || (status.connected && port() === status.localPort)));
-    reconnect.textContent = retry ? '重新读取' : status?.connected ? '应用端口' : '接通代理';
+    const changedPort = status && port() !== status.localPort;
+    const canApply = status && port() && (changedPort || (mask && !status.connected));
+    reconnect.disabled = !account || pending || (!retry && !canApply);
+    reconnect.textContent = retry ? '重新读取' : !mask ? '保存端口' : status.connected ? '应用端口' : '接通代理';
     const detail = pending ? '正在更新代理设置…' : error || (!account ? '接通服务器后可管理。' : !status ? '正在读取设置…'
       : !mask ? '代理已关闭。' : status.connected ? 'SSH 代理隧道已接通。'
         : '应用选项已保存。请接通代理后使用。');

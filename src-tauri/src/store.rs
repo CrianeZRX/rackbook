@@ -94,16 +94,27 @@ impl Store {
 
     /// Opens a server or image shell and streams its output as "term" events.
     pub async fn term_open(self: &Arc<Self>, id: Uuid, cols: u32, rows: u32, image: Option<&str>) -> Result<String, String> {
+        self.term_open_mode(id, cols, rows, image, None).await
+    }
+
+    pub(crate) async fn term_open_mode(self: &Arc<Self>, id: Uuid, cols: u32, rows: u32, image: Option<&str>, vpn_account: Option<Uuid>) -> Result<String, String> {
         use base64::Engine;
         let tid = Uuid::new_v4().to_string();
-        let (command, auth) = match image {
-            Some(image) => {
-                let (cmd, auth) = self.image_shell(id, image, &tid).await?;
-                (Some(cmd), auth)
-            }
-            None => (None, None),
+        let (c, command, auth) = if let Some(account) = vpn_account {
+            if image.is_some() { return Err("代理终端仅用于当前服务器账户".into()); }
+            let c = self.proxy_connection(id, account).await?;
+            let command = c.ensure_vpn_session().await?;
+            (c, Some(command), None)
+        } else {
+            let (command, auth) = match image {
+                Some(image) => {
+                    let (cmd, auth) = self.image_shell(id, image, &tid).await?;
+                    (Some(cmd), auth)
+                }
+                None => (None, None),
+            };
+            (self.conn(id).await?, command, auth)
         };
-        let c = self.conn(id).await?;
         let (mut rd, wr) = c.shell(cols, rows, command.as_deref(), auth.as_ref().map(|(prompt, ready, password)| (prompt.as_str(), ready.as_str(), password.as_str())))
             .await.map_err(|e| crate::ssh::friendly(&e.to_string()))?;
         self.terms.lock().await.insert(tid.clone(), Arc::new(wr));

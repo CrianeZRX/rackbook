@@ -26,24 +26,31 @@ export function mount(el, { id, image, onBack }) {
     : '真正的交互式 shell，跑在这艘船现有的 SSH 连接上：vim、htop、tmux 都能用。Ctrl+Shift+C / V 复制粘贴；窗口大小会自动同步给服务器。';
   el.innerHTML = `<div class="page" style="padding-top:18px;flex:1;min-height:0">
     <div class="card sk" style="flex:1;min-height:0">
-      <div class="head"><span class="kicker">Terminal</span><span class="h">${title}</span>
+      <div class="head"><span class="kicker">Terminal</span><span class="h" id="ttitle">${title}</span>
         <span class="mono muted small terminal-target" data-notr>${esc(target)}</span><span id="tstate" class="small"></span><span class="spacer"></span>
         <span id="tbtns" class="row"></span></div>
       <div class="termbox"><div id="term"></div></div>
-      <div class="foot">${note}</div>
+      <div class="foot" id="tnote">${note}</div>
     </div></div>`;
 
   let term = null, fit = null, tid = null, unlisten = null, alive = true, ro = null, state = 'connecting';
-  let starting = false;
+  let starting = false, vpn = false, stopping = false;
   const pending = [];
   const setState = (s) => {
     state = s;
     const t = el.querySelector('#tstate');
-    t.textContent = s === 'open' ? '● 已接通' : s === 'connecting' ? '… 正在接通' : '○ 已断开';
+    el.querySelector('#ttitle').textContent = vpn ? '代理终端' : title;
+    el.querySelector('#tnote').textContent = vpn
+      ? '此会话从命令到后台任务共享 VPN。首次进入会在当前账户目录安装 TUN 组件。停止会话会断开这些任务的网络。'
+      : note;
+    t.textContent = s === 'open' ? '● 已接通' : s === 'connecting' ? (vpn ? '… 正在准备代理会话' : '… 正在接通') : '○ 已断开';
     t.className = 'small ' + (s === 'open' ? 'okc' : s === 'closed' ? 'red' : 'muted');
-    el.querySelector('#tbtns').innerHTML = btn('清屏', { act: 'clear', cls: 'chip' }) + btn(s === 'open' ? '重新开一个' : '重新连接', { act: 'reopen', cls: 'chip' }) +
+    el.querySelector('#tbtns').innerHTML = btn('清屏', { act: 'clear', cls: 'chip' }) +
+      btn(s === 'open' ? '重新开一个' : '重新连接', { act: 'reopen', cls: 'chip', disabled: starting }) +
+      (!image ? btn(vpn ? '普通终端' : '代理终端', { act: 'vpn', cls: vpn ? 'chip active' : 'chip', disabled: starting || stopping || !acct?.id }) : '') +
+      (vpn ? btn('停止代理会话', { act: 'stop-vpn', cls: 'chip danger', disabled: starting || stopping }) : '') +
       (onBack ? btn('返回镜像', { act: 'back', cls: 'chip' }) :
-        isTauri ? btn('在系统终端打开', { act: 'external', cls: 'chip', title: '用 Windows Terminal / macOS 终端 / gnome-terminal 打开 ssh' }) : '');
+        isTauri && !vpn ? btn('在系统终端打开', { act: 'external', cls: 'chip', title: '用 Windows Terminal / macOS 终端 / gnome-terminal 打开 ssh' }) : '');
     sketchAll(el);
   };
 
@@ -57,7 +64,10 @@ export function mount(el, { id, image, onBack }) {
         await invoke('term_close', { tid: previous });
       }
       if (!alive) return;
-      const opened = await invoke('term_open', { id, cols: term.cols, rows: term.rows, ...(image && { image: image.id }) });
+      const opened = await invoke('term_open', {
+        id, cols: term.cols, rows: term.rows, ...(image && { image: image.id }),
+        ...(vpn && { vpnAccount: acct.id }),
+      });
       if (!alive) { invoke('term_close', { tid: opened }); return; }
       tid = opened;
       setState('open');
@@ -70,6 +80,7 @@ export function mount(el, { id, image, onBack }) {
     } finally {
       pending.length = 0;
       starting = false;
+      if (alive) setState(state);
     }
   };
 
@@ -120,6 +131,30 @@ export function mount(el, { id, image, onBack }) {
     back: onBack,
     clear: () => term?.clear(),
     reopen: () => { term?.reset(); open(); },
+    vpn: () => {
+      if (starting || stopping || !term) return;
+      vpn = !vpn;
+      term.reset();
+      open();
+    },
+    'stop-vpn': async () => {
+      if (starting || stopping) return;
+      stopping = true;
+      setState(state);
+      try {
+        await invoke('stop_vpn_session', { id, account: acct.id });
+        if (!alive) return;
+        say('当前账户的代理会话已停止。', 'ok');
+        vpn = false;
+        term?.reset();
+        open();
+      } catch (error) {
+        say(String(error?.message || error), 'refuse');
+      } finally {
+        stopping = false;
+        if (alive) setState(state);
+      }
+    },
     external: () => invoke('open_terminal', { id }).catch((e) => say('打不开系统终端：' + e, 'refuse')),
   });
   setState('connecting');
